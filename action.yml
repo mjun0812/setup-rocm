@@ -10,10 +10,8 @@ inputs:
   version:
     description: |
       The version of AMD ROCm to install.
-      If this value is not specified, the latest version will be installed.
-      This value is accepted in the `Major.Minor.Patch` or `Major.Minor` format.
-      If the Patch version is not specified, the latest Patch version will be installed.
-      For example, '7.2.4' or '7.2'.
+      Accepts 'latest', 'Major' (e.g. '7'), 'Major.Minor' (e.g. '7.2'), or 'Major.Minor.Patch' (e.g. '7.2.4').
+      If the Minor or Patch version is not specified, the latest matching version will be installed.
     default: latest
   method:
     description: |

@@ -20,6 +20,11 @@ on:
         required: false
         type: boolean
         default: false
+      expect-failure:
+        description: 'Expect the action step to fail (used to test version resolution failures)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   Test:
@@ -56,13 +61,24 @@ jobs:
 
       - name: Test Local Action
         id: setup-rocm
+        continue-on-error: ${{ inputs.expect-failure }}
         uses: ./
         with:
           version: ${{ inputs.version }}
           method: ${{ inputs.method }}
 
+      - name: Verify expected failure
+        if: inputs.expect-failure
+        shell: bash
+        run: |
+          echo "outcome=${{ steps.setup-rocm.outcome }}"
+          if [ "${{ steps.setup-rocm.outcome }}" != "failure" ]; then
+            echo "Error: expected the action step to fail, but outcome was '${{ steps.setup-rocm.outcome }}'"
+            exit 1
+          fi
+
       - name: Verify ROCm Installation (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !inputs.expect-failure
         shell: bash
         run: |
           echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
@@ -97,7 +113,7 @@ jobs:
       # that actually runs on the current OS (otherwise the skipped step's name can shadow the
       # real one at index [0]).
       - name: ${{ runner.os == 'Linux' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Linux-only step, skipped)' }}
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && !inputs.expect-failure
         shell: bash
         run: |
           cat <<EOF > "$RUNNER_TEMP/kernel.hip"
@@ -113,7 +129,7 @@ jobs:
           test -s "$RUNNER_TEMP/kernel.o"
 
       - name: Verify ROCm Installation (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !inputs.expect-failure
         shell: pwsh
         run: |
           echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
@@ -145,7 +161,7 @@ jobs:
           Write-Host "ROCm installation verified successfully"
 
       - name: Setup MSVC (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !inputs.expect-failure
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -154,7 +170,7 @@ jobs:
           toolset: '14.44'
 
       - name: ${{ runner.os == 'Windows' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Windows-only step, skipped)' }}
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !inputs.expect-failure
         shell: pwsh
         run: |
           @'
