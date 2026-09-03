@@ -149,6 +149,9 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+          # HIP SDK 7.2's clang headers conflict with MSVC 14.5x's cmath, so pin
+          # toolset 14.44 (bundled on both windows-2022 and windows-2025 images).
+          toolset: '14.44'
 
       - name: ${{ runner.os == 'Windows' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Windows-only step, skipped)' }}
         if: runner.os == 'Windows'
