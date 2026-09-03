@@ -1,5 +1,7 @@
 import { HttpClient } from '@actions/http-client';
 import { sortVersions } from './utils';
+import { isDebianBased, LinuxDistribution } from './os_arch';
+import { WINDOWS_HIP_SDK_INSTALLERS } from './const';
 
 /**
  * Supported ROCm installation methods
@@ -47,23 +49,38 @@ export const ROCM_RUNFILE_INDEX_URL =
 const NUMERIC_VERSION_PATTERN = /^\d+\.\d+(\.\d+)?$/;
 
 /**
+ * Parse an Apache-style directory listing HTML page into its raw link hrefs
+ * @param html - The directory index HTML
+ * @returns Link href values (directories and files alike), excluding the parent-directory link ("../")
+ */
+export function parseIndexLinks(html: string): string[] {
+  const linkPattern = /<a\s+href=['"]([^'"]+)['"]/gi;
+  const entries: string[] = [];
+
+  let match;
+  while ((match = linkPattern.exec(html)) !== null) {
+    const href = match[1];
+    if (href === '../') {
+      continue;
+    }
+    entries.push(href);
+  }
+
+  return entries;
+}
+
+/**
  * Parse an Apache-style directory listing HTML page into its directory entry names
  * @param html - The directory index HTML
  * @returns Directory entry names (trailing `/` removed), for links that point to a subdirectory
  */
 export function parseDirectoryIndex(html: string): string[] {
-  const linkPattern = /<a\s+href=['"]([^'"]+)['"]/gi;
   const entries = new Set<string>();
-
-  let match;
-  while ((match = linkPattern.exec(html)) !== null) {
-    const href = match[1];
-    if (href === '../' || !href.endsWith('/')) {
-      continue;
+  for (const href of parseIndexLinks(html)) {
+    if (href.endsWith('/')) {
+      entries.add(href.slice(0, -1));
     }
-    entries.add(href.slice(0, -1));
   }
-
   return [...entries];
 }
 
@@ -209,4 +226,163 @@ export function selectFallbackAfterInstallFailure(
   runfileVersions: string[]
 ): 'runfile' | undefined {
   return runfileVersions.includes(version) ? 'runfile' : undefined;
+}
+
+/**
+ * Fetch a directory index and pick out the `.run` file entry, if any
+ * @param client - HttpClient used to fetch the index
+ * @param url - Directory index URL
+ * @returns The `.run` filename found at this index, or undefined if the index does not
+ * exist (non-200) or contains no `.run` file
+ */
+async function findRunfileInIndex(client: HttpClient, url: string): Promise<string | undefined> {
+  const response = await client.get(url);
+  if (response.message.statusCode !== 200) {
+    return undefined;
+  }
+  const html = await response.readBody();
+  return parseIndexLinks(html).find((entry) => !entry.endsWith('/') && entry.endsWith('.run'));
+}
+
+/**
+ * Resolve the `.run` installer URL for a ROCm version from the runfile installer directory index
+ * The `.run` file is either directly under the release directory (e.g. 7.14.1), or under a
+ * distro-specific subdirectory (`ubuntu/<VERSION_ID>/` or `el<major>/`, e.g. 7.2.4)
+ * @param version - Resolved ROCm version (e.g. "7.2.4")
+ * @param distro - Linux distribution information used to pick the distro-specific subdirectory
+ * @returns Promise that resolves to the `.run` installer URL
+ */
+export async function resolveRunfileUrl(
+  version: string,
+  distro: LinuxDistribution
+): Promise<string> {
+  const client = new HttpClient('setup-rocm');
+  const releaseUrl = `${ROCM_RUNFILE_INDEX_URL}rocm-rel-${version}/`;
+
+  const runFile = await findRunfileInIndex(client, releaseUrl);
+  if (runFile) {
+    return `${releaseUrl}${runFile}`;
+  }
+
+  const subdir = isDebianBased(distro)
+    ? `ubuntu/${distro.version}/`
+    : `el${distro.version.split('.')[0]}/`;
+  const subdirUrl = `${releaseUrl}${subdir}`;
+  const subdirRunFile = await findRunfileInIndex(client, subdirUrl);
+  if (subdirRunFile) {
+    return `${subdirUrl}${subdirRunFile}`;
+  }
+
+  throw new Error(
+    `ROCm runfile installer for version ${version} was not found. Checked: ${releaseUrl}, ${subdirUrl}`
+  );
+}
+
+/**
+ * Select the RHEL companion repo `<osver>` directory from an index of available osvers
+ * Prefers an exact match on `VERSION_ID`; otherwise falls back to the largest osver within
+ * the same major version (e.g. VERSION_ID "9.5" falls back among "9", "9.4", "9.7", ...)
+ * @param osvers - Available osver directory names
+ * @param versionId - Distro `VERSION_ID` (e.g. "9.6")
+ * @returns The selected osver, or undefined if none match
+ */
+function selectRhelOsver(osvers: string[], versionId: string): string | undefined {
+  if (osvers.includes(versionId)) {
+    return versionId;
+  }
+  const major = versionId.split('.')[0];
+  const sameMajor = osvers.filter((osver) => osver === major || osver.startsWith(`${major}.`));
+  if (sameMajor.length === 0) {
+    return undefined;
+  }
+  return sortVersions(sameMajor)[sameMajor.length - 1];
+}
+
+/**
+ * Resolve the graphics/amdgpu companion repo for the Debian-based package-manager route
+ * Selects the graphics repo (7.0+) if it exists, otherwise falls back to the amdgpu repo
+ * @param version - Resolved ROCm version
+ * @returns Promise that resolves to the companion repo kind and URL (no trailing slash)
+ */
+async function resolveDebianCompanionRepo(
+  version: string
+): Promise<{ kind: 'graphics' | 'amdgpu'; url: string }> {
+  for (const kind of ['graphics', 'amdgpu'] as const) {
+    const indexUrl = `https://repo.radeon.com/${kind}/${version}/ubuntu/`;
+    if (await urlExists(indexUrl)) {
+      return { kind, url: indexUrl.slice(0, -1) };
+    }
+  }
+  throw new Error(
+    `ROCm companion repo (graphics/amdgpu) for version ${version} was not found. Checked: ` +
+      `https://repo.radeon.com/graphics/${version}/ubuntu/, https://repo.radeon.com/amdgpu/${version}/ubuntu/`
+  );
+}
+
+/**
+ * Resolve the graphics/amdgpu companion repo for the RHEL-based package-manager route
+ * Selects the graphics repo (7.0+) if it exists, otherwise falls back to the amdgpu repo,
+ * then picks the `<osver>` directory matching the distro's `VERSION_ID` (see `selectRhelOsver`)
+ * @param version - Resolved ROCm version
+ * @param distro - Linux distribution information (`VERSION_ID` drives the osver selection)
+ * @returns Promise that resolves to the companion repo kind and URL (trailing slash)
+ */
+async function resolveRhelCompanionRepo(
+  version: string,
+  distro: LinuxDistribution
+): Promise<{ kind: 'graphics' | 'amdgpu'; url: string }> {
+  const client = new HttpClient('setup-rocm');
+
+  for (const kind of ['graphics', 'amdgpu'] as const) {
+    const indexUrl = `https://repo.radeon.com/${kind}/${version}/rhel/`;
+    const response = await client.get(indexUrl);
+    if (response.message.statusCode !== 200) {
+      continue;
+    }
+    const html = await response.readBody();
+    const osver = selectRhelOsver(parseDirectoryIndex(html), distro.version);
+    if (!osver) {
+      throw new Error(
+        `ROCm ${kind} repo has no osver matching RHEL VERSION_ID ${distro.version} at ${indexUrl}`
+      );
+    }
+    return { kind, url: `https://repo.radeon.com/${kind}/${version}/rhel/${osver}/main/x86_64/` };
+  }
+
+  throw new Error(
+    `ROCm companion repo (graphics/amdgpu) for version ${version} was not found. Checked: ` +
+      `https://repo.radeon.com/graphics/${version}/rhel/, https://repo.radeon.com/amdgpu/${version}/rhel/`
+  );
+}
+
+/**
+ * Resolve the graphics/amdgpu companion repo required by the `rocm-hip-sdk` package-manager
+ * install (D-009). Debian-based distros check for repo existence directly; RHEL-based distros
+ * additionally resolve the `<osver>` subdirectory matching `VERSION_ID`
+ * @param version - Resolved ROCm version
+ * @param distro - Linux distribution information
+ * @returns Promise that resolves to the companion repo kind and URL
+ */
+export async function resolveCompanionRepo(
+  version: string,
+  distro: LinuxDistribution
+): Promise<{ kind: 'graphics' | 'amdgpu'; url: string }> {
+  if (isDebianBased(distro)) {
+    return resolveDebianCompanionRepo(version);
+  }
+  return resolveRhelCompanionRepo(version, distro);
+}
+
+/**
+ * Resolve the HIP SDK for Windows installer for a `version` input from the hard-coded
+ * version-to-installer table (D-011)
+ * @param input - Version string to match (e.g., "latest", "6.4", "7.2.0")
+ * @returns The matched version and installer URL, or undefined if not found
+ */
+export function findWindowsInstaller(input: string): { version: string; url: string } | undefined {
+  const version = findRocmVersion(input, Object.keys(WINDOWS_HIP_SDK_INSTALLERS));
+  if (!version) {
+    return undefined;
+  }
+  return { version, url: WINDOWS_HIP_SDK_INSTALLERS[version] };
 }
