@@ -1,0 +1,33 @@
+name: Full Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 'OS to test'
+        required: true
+        type: string
+      version:
+        description: 'ROCm version to test'
+        required: false
+        type: string
+        default: latest
+      method:
+        description: 'Method to test'
+        required: false
+        type: string
+        default: auto
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  Test:
+    uses: ./.github/workflows/_test.yml
+    with:
+      os: ${{ inputs.os }}
+      version: ${{ inputs.version }}
+      method: ${{ inputs.method }}
+      debug: ${{ inputs.debug }}
