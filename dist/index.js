@@ -17699,6 +17699,15 @@ const ROCM_GPG_KEY_URL = "https://repo.radeon.com/rocm/rocm.gpg.key";
 function ROCM_APT_REPO_URL(version) {
 	return `https://repo.radeon.com/rocm/apt/${version}`;
 }
+/**
+* RHEL-based ROCm dnf repository URL for a given major/version, used in the rocm.repo baseurl (D-009)
+* @param major - RHEL major version (e.g. "9")
+* @param version - Resolved ROCm version (e.g. "7.2.4")
+* @returns The ROCm dnf repository URL (no trailing slash)
+*/
+function ROCM_EL_REPO_URL(major, version) {
+	return `https://repo.radeon.com/rocm/el${major}/${version}/main`;
+}
 //#endregion
 //#region src/rocm.ts
 /**
@@ -19569,6 +19578,61 @@ async function installPackageManagerDebian(version, distro, companion) {
 	await exec(`${sudoPrefix} apt-get install -y ${ROCM_META_PACKAGE}`.trim(), void 0, { env });
 }
 /**
+* Enable the RHEL-based repo required for `rocm-hip-sdk`'s dependencies: `powertools` on el8,
+* `crb` on el9/el10 (D-009)
+* @param major - RHEL major version (e.g. "9")
+* @param sudoPrefix - 'sudo' or '' (from `getSudoPrefix`)
+*/
+async function enableRhelCrbRepo(major, sudoPrefix) {
+	await exec(`${sudoPrefix} dnf config-manager --set-enabled ${major === "8" ? "powertools" : "crb"}`.trim());
+}
+/**
+* Build the /etc/yum.repos.d/rocm.repo content registering the ROCm repo and its companion
+* (graphics/amdgpu) repo (D-009)
+* @param version - Resolved ROCm version
+* @param major - RHEL major version (e.g. "9")
+* @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
+*/
+function buildRocmRepoFile(version, major, companion) {
+	return [
+		"[rocm]",
+		`name=ROCm ${version} repository`,
+		`baseurl=${ROCM_EL_REPO_URL(major, version)}`,
+		"enabled=1",
+		"priority=50",
+		"gpgcheck=1",
+		`gpgkey=${ROCM_GPG_KEY_URL}`,
+		"",
+		"[amdgraphics]",
+		`name=AMD graphics ${version} repository`,
+		`baseurl=${companion.url}`,
+		"enabled=1",
+		"priority=50",
+		"gpgcheck=1",
+		`gpgkey=${ROCM_GPG_KEY_URL}`
+	].join("\n") + "\n";
+}
+/**
+* Install ROCm on a RHEL-based (Fedora-based) distribution via dnf (D-009)
+* @param version - Resolved ROCm version
+* @param distro - Linux distribution information
+* @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
+*/
+async function installPackageManagerRhel(version, distro, companion) {
+	const sudoPrefix = getSudoPrefix();
+	const major = distro.version.split(".")[0];
+	info("Installing EPEL and dnf-plugins-core...");
+	await exec(`${sudoPrefix} dnf install -y epel-release dnf-plugins-core`.trim());
+	info(`Enabling the ${major === "8" ? "powertools" : "crb"} repo...`);
+	await enableRhelCrbRepo(major, sudoPrefix);
+	info(`Registering ROCm dnf repository (${version}) and companion repo (${companion.kind})...`);
+	await writeRootFile(buildRocmRepoFile(version, major, companion), "/etc/yum.repos.d/rocm.repo", sudoPrefix);
+	info("Running dnf clean all...");
+	await exec(`${sudoPrefix} dnf clean all`.trim());
+	info(`Installing ${ROCM_META_PACKAGE}...`);
+	await exec(`${sudoPrefix} dnf install -y ${ROCM_META_PACKAGE}`.trim());
+}
+/**
 * Install ROCm via the distro's package manager (apt/dnf) (D-012)
 * @param version - Resolved ROCm version (e.g. "7.2.4")
 * @param distro - Linux distribution information
@@ -19576,8 +19640,9 @@ async function installPackageManagerDebian(version, distro, companion) {
 * @returns The path to the ROCm installation ("/opt/rocm")
 */
 async function installPackageManager(version, distro, companion) {
-	if (!isDebianBased(distro)) throw new Error(`Unsupported distribution for package-manager install: ${distro.id}`);
-	await installPackageManagerDebian(version, distro, companion);
+	if (isDebianBased(distro)) await installPackageManagerDebian(version, distro, companion);
+	else if (isFedoraBased(distro)) await installPackageManagerRhel(version, distro, companion);
+	else throw new Error(`Unsupported distribution for package-manager install: ${distro.id}`);
 	const rocmPath = "/opt/rocm";
 	const hipcc = path.join(rocmPath, "bin", "hipcc");
 	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);

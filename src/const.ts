@@ -37,3 +37,13 @@ export const ROCM_GPG_KEY_URL = 'https://repo.radeon.com/rocm/rocm.gpg.key';
 export function ROCM_APT_REPO_URL(version: string): string {
   return `https://repo.radeon.com/rocm/apt/${version}`;
 }
+
+/**
+ * RHEL-based ROCm dnf repository URL for a given major/version, used in the rocm.repo baseurl (D-009)
+ * @param major - RHEL major version (e.g. "9")
+ * @param version - Resolved ROCm version (e.g. "7.2.4")
+ * @returns The ROCm dnf repository URL (no trailing slash)
+ */
+export function ROCM_EL_REPO_URL(major: string, version: string): string {
+  return `https://repo.radeon.com/rocm/el${major}/${version}/main`;
+}

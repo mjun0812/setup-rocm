@@ -4,9 +4,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as tc from '@actions/tool-cache';
-import { LinuxDistribution, isDebianBased } from './os_arch';
+import { LinuxDistribution, isDebianBased, isFedoraBased } from './os_arch';
 import { hasRootPrivileges } from './utils';
-import { ROCM_GPG_KEY_URL, ROCM_APT_REPO_URL, ROCM_META_PACKAGE } from './const';
+import { ROCM_GPG_KEY_URL, ROCM_APT_REPO_URL, ROCM_EL_REPO_URL, ROCM_META_PACKAGE } from './const';
 
 /**
  * Get sudo prefix for command execution
@@ -109,6 +109,86 @@ async function installPackageManagerDebian(
 }
 
 /**
+ * Enable the RHEL-based repo required for `rocm-hip-sdk`'s dependencies: `powertools` on el8,
+ * `crb` on el9/el10 (D-009)
+ * @param major - RHEL major version (e.g. "9")
+ * @param sudoPrefix - 'sudo' or '' (from `getSudoPrefix`)
+ */
+async function enableRhelCrbRepo(major: string, sudoPrefix: string): Promise<void> {
+  const repoName = major === '8' ? 'powertools' : 'crb';
+  await exec.exec(`${sudoPrefix} dnf config-manager --set-enabled ${repoName}`.trim());
+}
+
+/**
+ * Build the /etc/yum.repos.d/rocm.repo content registering the ROCm repo and its companion
+ * (graphics/amdgpu) repo (D-009)
+ * @param version - Resolved ROCm version
+ * @param major - RHEL major version (e.g. "9")
+ * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
+ */
+function buildRocmRepoFile(
+  version: string,
+  major: string,
+  companion: { kind: 'graphics' | 'amdgpu'; url: string }
+): string {
+  return (
+    [
+      '[rocm]',
+      `name=ROCm ${version} repository`,
+      `baseurl=${ROCM_EL_REPO_URL(major, version)}`,
+      'enabled=1',
+      'priority=50',
+      'gpgcheck=1',
+      `gpgkey=${ROCM_GPG_KEY_URL}`,
+      '',
+      '[amdgraphics]',
+      `name=AMD graphics ${version} repository`,
+      `baseurl=${companion.url}`,
+      'enabled=1',
+      'priority=50',
+      'gpgcheck=1',
+      `gpgkey=${ROCM_GPG_KEY_URL}`,
+    ].join('\n') + '\n'
+  );
+}
+
+/**
+ * Install ROCm on a RHEL-based (Fedora-based) distribution via dnf (D-009)
+ * @param version - Resolved ROCm version
+ * @param distro - Linux distribution information
+ * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
+ */
+async function installPackageManagerRhel(
+  version: string,
+  distro: LinuxDistribution,
+  companion: { kind: 'graphics' | 'amdgpu'; url: string }
+): Promise<void> {
+  const sudoPrefix = getSudoPrefix();
+  const major = distro.version.split('.')[0];
+
+  core.info('Installing EPEL and dnf-plugins-core...');
+  await exec.exec(`${sudoPrefix} dnf install -y epel-release dnf-plugins-core`.trim());
+
+  core.info(`Enabling the ${major === '8' ? 'powertools' : 'crb'} repo...`);
+  await enableRhelCrbRepo(major, sudoPrefix);
+
+  core.info(
+    `Registering ROCm dnf repository (${version}) and companion repo (${companion.kind})...`
+  );
+  await writeRootFile(
+    buildRocmRepoFile(version, major, companion),
+    '/etc/yum.repos.d/rocm.repo',
+    sudoPrefix
+  );
+
+  core.info('Running dnf clean all...');
+  await exec.exec(`${sudoPrefix} dnf clean all`.trim());
+
+  core.info(`Installing ${ROCM_META_PACKAGE}...`);
+  await exec.exec(`${sudoPrefix} dnf install -y ${ROCM_META_PACKAGE}`.trim());
+}
+
+/**
  * Install ROCm via the distro's package manager (apt/dnf) (D-012)
  * @param version - Resolved ROCm version (e.g. "7.2.4")
  * @param distro - Linux distribution information
@@ -120,11 +200,13 @@ export async function installPackageManager(
   distro: LinuxDistribution,
   companion: { kind: 'graphics' | 'amdgpu'; url: string }
 ): Promise<string> {
-  if (!isDebianBased(distro)) {
+  if (isDebianBased(distro)) {
+    await installPackageManagerDebian(version, distro, companion);
+  } else if (isFedoraBased(distro)) {
+    await installPackageManagerRhel(version, distro, companion);
+  } else {
     throw new Error(`Unsupported distribution for package-manager install: ${distro.id}`);
   }
-
-  await installPackageManagerDebian(version, distro, companion);
 
   const rocmPath = '/opt/rocm';
   const hipcc = path.join(rocmPath, 'bin', 'hipcc');
