@@ -17683,6 +17683,15 @@ function hasRootPrivileges() {
 }
 //#endregion
 //#region src/const.ts
+const WINDOWS_HIP_SDK_INSTALLERS = {
+	"5.5.1": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-23.Q3-Win10-Win11-For-HIP.exe",
+	"5.7.1": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-23.Q4-Win10-Win11-For-HIP.exe",
+	"6.1.2": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-Win10-Win11-For-HIP.exe",
+	"6.2.4": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q4-Win10-Win11-For-HIP.exe",
+	"6.4.2": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-25.Q3-Win10-Win11-For-HIP.exe",
+	"7.1.1": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-26.Q1-Win11-For-HIP.exe",
+	"7.2.0": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-26.Q3-Win11-For-HIP.exe"
+};
 /**
 * The rocm-hip-sdk meta-package installed via apt/dnf (D-003)
 */
@@ -17958,6 +17967,20 @@ async function resolveRhelCompanionRepo(version, distro) {
 async function resolveCompanionRepo(version, distro) {
 	if (isDebianBased(distro)) return resolveDebianCompanionRepo(version);
 	return resolveRhelCompanionRepo(version, distro);
+}
+/**
+* Resolve the HIP SDK for Windows installer for a `version` input from the hard-coded
+* version-to-installer table (D-011)
+* @param input - Version string to match (e.g., "latest", "6.4", "7.2.0")
+* @returns The matched version and installer URL, or undefined if not found
+*/
+function findWindowsInstaller(input) {
+	const version = findRocmVersion(input, Object.keys(WINDOWS_HIP_SDK_INSTALLERS));
+	if (!version) return;
+	return {
+		version,
+		url: WINDOWS_HIP_SDK_INSTALLERS[version]
+	};
 }
 //#endregion
 //#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
@@ -19708,6 +19731,49 @@ async function installRunfile(version, distro) {
 	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
 	return rocmPath;
 }
+/**
+* Install ROCm via the HIP SDK for Windows installer exe (D-004, D-011). The version-to-installer
+* table has no machine-readable index, so mapping errors surface here: the extracted directory
+* name is checked after install, not just the download
+* @param input - Raw `version` input
+* @returns The resolved version and the path to the ROCm installation
+*/
+async function installWindows(input) {
+	const resolved = findWindowsInstaller(input);
+	if (!resolved) throw notFoundError(input, [Object.keys(WINDOWS_HIP_SDK_INSTALLERS).join(", ")]);
+	const { version, url } = resolved;
+	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
+	info(`Downloading ROCm HIP SDK installer for ${version} from ${url}...`);
+	const installerPath = path.win32.normalize(await downloadTool(url, path.win32.join(tempDir, `rocm-hip-sdk-${version}.exe`)));
+	const logPath = path.win32.join(tempDir, "rocm-install.log");
+	info(`Installing ROCm ${version} via HIP SDK installer...`);
+	try {
+		await exec(`"${installerPath}"`, [
+			"-install",
+			"-log",
+			logPath
+		]);
+	} catch (error) {
+		if (fs.existsSync(logPath)) info(fs.readFileSync(logPath, "utf-8").slice(-4e3));
+		throw error;
+	}
+	const majorMinor = version.split(".").slice(0, 2).join(".");
+	const rocmPath = path.win32.join("C:\\Program Files\\AMD\\ROCm", majorMinor);
+	const hasHipcc = fs.existsSync(path.win32.join(rocmPath, "bin", "hipcc.bin.exe"));
+	const hasClang = fs.existsSync(path.win32.join(rocmPath, "bin", "clang.exe"));
+	if (!hasHipcc && !hasClang) {
+		try {
+			info(`Contents of C:\\Program Files\\AMD\\ROCm: ${fs.readdirSync("C:\\Program Files\\AMD\\ROCm").join(", ")}`);
+		} catch {}
+		throw new Error(`ROCm installation failed. hipcc/clang not found under ${rocmPath}\\bin`);
+	}
+	info("Cleaning up installer...");
+	await rmRF(installerPath);
+	return {
+		version,
+		rocmPath
+	};
+}
 //#endregion
 //#region src/index.ts
 /**
@@ -19791,7 +19857,10 @@ async function run() {
 		} else {
 			const windowsVersion = getWindowsVersion();
 			info(`Windows version: ${windowsVersion.name} (${windowsVersion.release}, build ${windowsVersion.build})`);
-			throw new Error("Windows support is not available yet on this build");
+			if (method !== "auto") info("The method input is ignored on Windows (HIP SDK installer only)");
+			const result = await installWindows(inputVersion);
+			version = result.version;
+			rocmPath = result.rocmPath;
 		}
 		setEnvironmentVariables(osType, rocmPath);
 		setOutput("version", version);

@@ -7,8 +7,14 @@ import * as tc from '@actions/tool-cache';
 import * as io from '@actions/io';
 import { LinuxDistribution, isDebianBased, isFedoraBased } from './os_arch';
 import { hasRootPrivileges } from './utils';
-import { resolveRunfileUrl } from './rocm';
-import { ROCM_GPG_KEY_URL, ROCM_APT_REPO_URL, ROCM_EL_REPO_URL, ROCM_META_PACKAGE } from './const';
+import { resolveRunfileUrl, findWindowsInstaller, notFoundError } from './rocm';
+import {
+  ROCM_GPG_KEY_URL,
+  ROCM_APT_REPO_URL,
+  ROCM_EL_REPO_URL,
+  ROCM_META_PACKAGE,
+  WINDOWS_HIP_SDK_INSTALLERS,
+} from './const';
 
 /**
  * Get sudo prefix for command execution
@@ -263,4 +269,58 @@ export async function installRunfile(version: string, distro: LinuxDistribution)
     throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
   }
   return rocmPath;
+}
+
+/**
+ * Install ROCm via the HIP SDK for Windows installer exe (D-004, D-011). The version-to-installer
+ * table has no machine-readable index, so mapping errors surface here: the extracted directory
+ * name is checked after install, not just the download
+ * @param input - Raw `version` input
+ * @returns The resolved version and the path to the ROCm installation
+ */
+export async function installWindows(
+  input: string
+): Promise<{ version: string; rocmPath: string }> {
+  const resolved = findWindowsInstaller(input);
+  if (!resolved) {
+    throw notFoundError(input, [Object.keys(WINDOWS_HIP_SDK_INSTALLERS).join(', ')]);
+  }
+  const { version, url } = resolved;
+  const tempDir = process.env['RUNNER_TEMP'] || os.tmpdir();
+
+  core.info(`Downloading ROCm HIP SDK installer for ${version} from ${url}...`);
+  const installerPath = path.win32.normalize(
+    await tc.downloadTool(url, path.win32.join(tempDir, `rocm-hip-sdk-${version}.exe`))
+  );
+
+  const logPath = path.win32.join(tempDir, 'rocm-install.log');
+  core.info(`Installing ROCm ${version} via HIP SDK installer...`);
+  try {
+    await exec.exec(`"${installerPath}"`, ['-install', '-log', logPath]);
+  } catch (error) {
+    if (fs.existsSync(logPath)) {
+      core.info(fs.readFileSync(logPath, 'utf-8').slice(-4000));
+    }
+    throw error;
+  }
+
+  const majorMinor = version.split('.').slice(0, 2).join('.');
+  const rocmPath = path.win32.join('C:\\Program Files\\AMD\\ROCm', majorMinor);
+  const hasHipcc = fs.existsSync(path.win32.join(rocmPath, 'bin', 'hipcc.bin.exe'));
+  const hasClang = fs.existsSync(path.win32.join(rocmPath, 'bin', 'clang.exe'));
+  if (!hasHipcc && !hasClang) {
+    try {
+      core.info(
+        `Contents of C:\\Program Files\\AMD\\ROCm: ${fs.readdirSync('C:\\Program Files\\AMD\\ROCm').join(', ')}`
+      );
+    } catch {
+      // ignore: directory may not exist
+    }
+    throw new Error(`ROCm installation failed. hipcc/clang not found under ${rocmPath}\\bin`);
+  }
+
+  core.info('Cleaning up installer...');
+  await io.rmRF(installerPath);
+
+  return { version, rocmPath };
 }

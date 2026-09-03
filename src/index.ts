@@ -25,7 +25,7 @@ import {
   ROCM_EL_INDEX_URL,
   ROCM_RUNFILE_INDEX_URL,
 } from './rocm';
-import { installPackageManager, installRunfile } from './install';
+import { installPackageManager, installRunfile, installWindows } from './install';
 import { getErrorMessage } from './utils';
 
 /**
@@ -154,12 +154,18 @@ async function run(): Promise<void> {
       version = result.version;
       rocmPath = result.rocmPath;
     } else {
-      // Windows support is added in a later task
       const windowsVersion = getWindowsVersion();
       core.info(
         `Windows version: ${windowsVersion.name} (${windowsVersion.release}, build ${windowsVersion.build})`
       );
-      throw new Error('Windows support is not available yet on this build');
+
+      if (method !== 'auto') {
+        core.info('The method input is ignored on Windows (HIP SDK installer only)');
+      }
+
+      const result = await installWindows(inputVersion);
+      version = result.version;
+      rocmPath = result.rocmPath;
     }
 
     // Set environment variables

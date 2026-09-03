@@ -91,7 +91,12 @@ jobs:
 
           echo "ROCm installation verified successfully"
 
-      - name: Cross-compile HIP kernel (gfx942)
+      # `select(.name | test("Cross-compile"))` in test/ci/run_full_test.sh looks at every step
+      # declared in this job, including the one skipped for the other OS, so both this step's
+      # name and the Windows one below must only contain "Cross-compile" when they are the one
+      # that actually runs on the current OS (otherwise the skipped step's name can shadow the
+      # real one at index [0]).
+      - name: ${{ runner.os == 'Linux' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Linux-only step, skipped)' }}
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -106,3 +111,69 @@ jobs:
 
           hipcc --offload-arch=gfx942 -c "$RUNNER_TEMP/kernel.hip" -o "$RUNNER_TEMP/kernel.o"
           test -s "$RUNNER_TEMP/kernel.o"
+
+      - name: Verify ROCm Installation (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
+          echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
+          echo "ROCM_PATH=$env:ROCM_PATH"
+
+          $ok = $false
+          try {
+            hipcc --version
+            $ok = ($LASTEXITCODE -eq 0)
+          } catch {
+            $ok = $false
+          }
+
+          if (-not $ok) {
+            try {
+              clang --version
+              $ok = ($LASTEXITCODE -eq 0)
+            } catch {
+              $ok = $false
+            }
+          }
+
+          if (-not $ok) {
+            Write-Error "Error: neither 'hipcc --version' nor 'clang --version' succeeded"
+            exit 1
+          }
+
+          Write-Host "ROCm installation verified successfully"
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: ${{ runner.os == 'Windows' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Windows-only step, skipped)' }}
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          @'
+          #include <hip/hip_runtime.h>
+
+          __global__ void add(const float* a, const float* b, float* c, int n) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n) c[i] = a[i] + b[i];
+          }
+          '@ | Out-File -FilePath "$env:RUNNER_TEMP\kernel.hip" -Encoding ascii
+
+          hipcc --offload-arch=gfx942 -c "$env:RUNNER_TEMP\kernel.hip" -o "$env:RUNNER_TEMP\kernel.o"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Error: hipcc compilation failed"
+            exit 1
+          }
+
+          if (-not (Test-Path "$env:RUNNER_TEMP\kernel.o")) {
+            Write-Error "Error: kernel.o was not generated"
+            exit 1
+          }
+          if ((Get-Item "$env:RUNNER_TEMP\kernel.o").Length -eq 0) {
+            Write-Error "Error: kernel.o is empty"
+            exit 1
+          }
