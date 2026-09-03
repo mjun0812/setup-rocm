@@ -22,12 +22,56 @@ on:
         required: false
         type: boolean
         default: false
+      expect-failure:
+        description: 'Expect the action step to fail (used to test version resolution failures)'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '0 3 * * 0'
 
 jobs:
   Test:
+    name: Test
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/_test.yml
     with:
       os: ${{ inputs.os }}
       version: ${{ inputs.version }}
       method: ${{ inputs.method }}
       debug: ${{ inputs.debug }}
+      expect-failure: ${{ inputs.expect-failure }}
+
+  Full-Test:
+    name: Full Test
+    if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - windows-2022
+          - windows-2025
+        method:
+          - package-manager
+          - runfile
+          - auto
+        version:
+          - latest
+        exclude:
+          # Windows ignores `method` (single HIP SDK installer route), so only `auto` is needed.
+          - os: windows-2022
+            method: package-manager
+          - os: windows-2022
+            method: runfile
+          - os: windows-2025
+            method: package-manager
+          - os: windows-2025
+            method: runfile
+    uses: ./.github/workflows/_test.yml
+    with:
+      os: ${{ matrix.os }}
+      version: ${{ matrix.version }}
+      method: ${{ matrix.method }}
+      debug: true
