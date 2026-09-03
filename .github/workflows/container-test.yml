@@ -1,0 +1,34 @@
+name: Container Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      container:
+        description: 'Docker image to test (e.g. almalinux:9)'
+        required: true
+        type: string
+      version:
+        description: 'ROCm version to test'
+        required: false
+        type: string
+        default: latest
+      method:
+        description: 'Method to test'
+        required: false
+        type: string
+        default: auto
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  Container-Test:
+    name: Container Test
+    uses: ./.github/workflows/_test-container.yml
+    with:
+      container: ${{ inputs.container }}
+      version: ${{ inputs.version }}
+      method: ${{ inputs.method }}
+      debug: ${{ inputs.debug }}
