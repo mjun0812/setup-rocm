@@ -173,7 +173,7 @@ export async function fetchRunfileVersions(): Promise<string[]> {
  * A `Major.Minor.Patch` input resolves only via exact match; a `Major` or `Major.Minor`
  * input always resolves to the latest version among itself and its `input.`-prefixed
  * entries, even when the input string is itself a listed entry (e.g. "7.14" resolves to
- * "7.14.1", not "7.14", when both are listed) (D-020)
+ * "7.14.1", not "7.14", when both are listed)
  * @param input - Version string to match (e.g., "latest", "7", "7.2", "7.2.4")
  * @param versions - Available version strings (may include non-numeric entries)
  * @returns The matched version string, or undefined if not found
@@ -357,7 +357,7 @@ async function resolveRhelCompanionRepo(
 
 /**
  * Resolve the graphics/amdgpu companion repo required by the `rocm-hip-sdk` package-manager
- * install (D-009). Debian-based distros check for repo existence directly; RHEL-based distros
+ * install. Debian-based distros check for repo existence directly; RHEL-based distros
  * additionally resolve the `<osver>` subdirectory matching `VERSION_ID`
  * @param version - Resolved ROCm version
  * @param distro - Linux distribution information
@@ -375,7 +375,7 @@ export async function resolveCompanionRepo(
 
 /**
  * Resolve the HIP SDK for Windows installer for a `version` input from the hard-coded
- * version-to-installer table (D-011)
+ * version-to-installer table
  * @param input - Version string to match (e.g., "latest", "6.4", "7.2.0")
  * @returns The matched version and installer URL, or undefined if not found
  */

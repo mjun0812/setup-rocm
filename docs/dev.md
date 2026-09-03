@@ -128,7 +128,7 @@ Runs on:
 
 - Manual trigger (`workflow_dispatch`)
 
-Tests on container environments (via the reusable `_test-container.yml` workflow):
+Tests one container environment per dispatch (`container` input, via the reusable `_test-container.yml` workflow), e.g.:
 
 - almalinux:9
 - quay.io/pypa/manylinux_2_28_x86_64

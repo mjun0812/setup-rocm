@@ -29,8 +29,7 @@ import { installPackageManager, installRunfile, installWindows } from './install
 import { getErrorMessage } from './utils';
 
 /**
- * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux
- * (D-005, D-018).
+ * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux.
  * @param inputVersion - Raw `version` input
  * @param method - Parsed `method` input
  * @param distro - Linux distribution information
@@ -49,7 +48,7 @@ async function resolveAndInstallLinux(
   let route: 'package-manager' | 'runfile' | undefined;
 
   if (method === 'package-manager' || method === 'auto') {
-    // Only fetch the package-manager version list for routes that can use it (D-005):
+    // Only fetch the package-manager version list for routes that can use it:
     // `method: runfile` resolves solely against the runfile list below.
     const pmVersions = debianBased
       ? await fetchAptVersions(distro.codename)
@@ -100,7 +99,7 @@ async function resolveAndInstallLinux(
 }
 
 /**
- * Export ROCm environment variables and add its bin directory to PATH (D-007)
+ * Export ROCm environment variables and add its bin directory to PATH
  * @param osType - Operating system type
  * @param rocmPath - Path to the ROCm installation
  */

@@ -17693,15 +17693,15 @@ const WINDOWS_HIP_SDK_INSTALLERS = {
 	"7.2.0": "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-26.Q3-Win11-For-HIP.exe"
 };
 /**
-* The rocm-hip-sdk meta-package installed via apt/dnf (D-003)
+* The rocm-hip-sdk meta-package installed via apt/dnf
 */
 const ROCM_META_PACKAGE = "rocm-hip-sdk";
 /**
-* URL of the ROCm apt repository's GPG signing key (D-012)
+* URL of the ROCm apt repository's GPG signing key
 */
 const ROCM_GPG_KEY_URL = "https://repo.radeon.com/rocm/rocm.gpg.key";
 /**
-* Debian-based ROCm apt repository URL for a given version, used in the sources.list entry (D-012)
+* Debian-based ROCm apt repository URL for a given version, used in the sources.list entry
 * @param version - Resolved ROCm version (e.g. "7.2.4")
 * @returns The ROCm apt repository URL (no trailing slash)
 */
@@ -17709,7 +17709,7 @@ function ROCM_APT_REPO_URL(version) {
 	return `https://repo.radeon.com/rocm/apt/${version}`;
 }
 /**
-* RHEL-based ROCm dnf repository URL for a given major/version, used in the rocm.repo baseurl (D-009)
+* RHEL-based ROCm dnf repository URL for a given major/version, used in the rocm.repo baseurl
 * @param major - RHEL major version (e.g. "9")
 * @param version - Resolved ROCm version (e.g. "7.2.4")
 * @returns The ROCm dnf repository URL (no trailing slash)
@@ -17834,7 +17834,7 @@ async function fetchRunfileVersions() {
 * A `Major.Minor.Patch` input resolves only via exact match; a `Major` or `Major.Minor`
 * input always resolves to the latest version among itself and its `input.`-prefixed
 * entries, even when the input string is itself a listed entry (e.g. "7.14" resolves to
-* "7.14.1", not "7.14", when both are listed) (D-020)
+* "7.14.1", not "7.14", when both are listed)
 * @param input - Version string to match (e.g., "latest", "7", "7.2", "7.2.4")
 * @param versions - Available version strings (may include non-numeric entries)
 * @returns The matched version string, or undefined if not found
@@ -17958,7 +17958,7 @@ async function resolveRhelCompanionRepo(version, distro) {
 }
 /**
 * Resolve the graphics/amdgpu companion repo required by the `rocm-hip-sdk` package-manager
-* install (D-009). Debian-based distros check for repo existence directly; RHEL-based distros
+* install. Debian-based distros check for repo existence directly; RHEL-based distros
 * additionally resolve the `<osver>` subdirectory matching `VERSION_ID`
 * @param version - Resolved ROCm version
 * @param distro - Linux distribution information
@@ -17970,7 +17970,7 @@ async function resolveCompanionRepo(version, distro) {
 }
 /**
 * Resolve the HIP SDK for Windows installer for a `version` input from the hard-coded
-* version-to-installer table (D-011)
+* version-to-installer table
 * @param input - Version string to match (e.g., "latest", "6.4", "7.2.0")
 * @returns The matched version and installer URL, or undefined if not found
 */
@@ -19569,6 +19569,13 @@ function getSudoPrefix() {
 	return hasRootPrivileges() ? "" : "sudo";
 }
 /**
+* Get the runner's temp directory
+* @returns `RUNNER_TEMP` if set, otherwise the OS temp directory
+*/
+function getTempDir() {
+	return process.env["RUNNER_TEMP"] || os.tmpdir();
+}
+/**
 * Write a file to a root-owned destination: directly if already root, otherwise via a
 * temp file installed with `sudo install` (setup-cuda's `getSudoPrefix` pattern)
 * @param content - File content to write
@@ -19580,18 +19587,18 @@ async function writeRootFile(content, destination, sudoPrefix) {
 		fs.writeFileSync(destination, content);
 		return;
 	}
-	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
+	const tempDir = getTempDir();
 	const tempFile = path.join(tempDir, path.basename(destination));
 	fs.writeFileSync(tempFile, content);
 	await exec(`sudo install -m 0644 ${tempFile} ${destination}`);
 }
 /**
-* Install the ROCm apt repository signing key, dearmored into /etc/apt/keyrings/rocm.gpg (D-012)
+* Install the ROCm apt repository signing key, dearmored into /etc/apt/keyrings/rocm.gpg
 * @param sudoPrefix - 'sudo' or '' (from `getSudoPrefix`)
 */
 async function installAptSigningKey(sudoPrefix) {
 	const keyFile = await downloadTool(ROCM_GPG_KEY_URL);
-	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
+	const tempDir = getTempDir();
 	const dearmoredKeyFile = path.join(tempDir, "rocm.gpg");
 	await exec("gpg", [
 		"--dearmor",
@@ -19600,10 +19607,12 @@ async function installAptSigningKey(sudoPrefix) {
 		keyFile
 	]);
 	await exec(`${sudoPrefix} install -D -m 0644 ${dearmoredKeyFile} /etc/apt/keyrings/rocm.gpg`.trim());
+	await rmRF(keyFile);
+	await rmRF(dearmoredKeyFile);
 }
 /**
 * Register the ROCm apt repository and its companion (graphics/amdgpu) repository, pinned
-* above the distro's own packages (D-009, D-012)
+* above the distro's own packages
 * @param version - Resolved ROCm version
 * @param distro - Linux distribution information
 * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
@@ -19614,7 +19623,7 @@ async function registerAptRepositories(version, distro, companion, sudoPrefix) {
 	await writeRootFile("Package: *\nPin: release o=repo.radeon.com\nPin-Priority: 600\n", "/etc/apt/preferences.d/rocm-pin-600", sudoPrefix);
 }
 /**
-* Install ROCm on a Debian-based distribution via apt (D-012)
+* Install ROCm on a Debian-based distribution via apt
 * @param version - Resolved ROCm version
 * @param distro - Linux distribution information
 * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
@@ -19636,7 +19645,7 @@ async function installPackageManagerDebian(version, distro, companion) {
 }
 /**
 * Enable the RHEL-based repo required for `rocm-hip-sdk`'s dependencies: `powertools` on el8,
-* `crb` on el9/el10 (D-009)
+* `crb` on el9/el10
 * @param major - RHEL major version (e.g. "9")
 * @param sudoPrefix - 'sudo' or '' (from `getSudoPrefix`)
 */
@@ -19645,7 +19654,7 @@ async function enableRhelCrbRepo(major, sudoPrefix) {
 }
 /**
 * Build the /etc/yum.repos.d/rocm.repo content registering the ROCm repo and its companion
-* (graphics/amdgpu) repo (D-009)
+* (graphics/amdgpu) repo
 * @param version - Resolved ROCm version
 * @param major - RHEL major version (e.g. "9")
 * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
@@ -19670,7 +19679,7 @@ function buildRocmRepoFile(version, major, companion) {
 	].join("\n") + "\n";
 }
 /**
-* Install ROCm on a RHEL-based (Fedora-based) distribution via dnf (D-009)
+* Install ROCm on a RHEL-based (Fedora-based) distribution via dnf
 * @param version - Resolved ROCm version
 * @param distro - Linux distribution information
 * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
@@ -19690,7 +19699,17 @@ async function installPackageManagerRhel(version, distro, companion) {
 	await exec(`${sudoPrefix} dnf install -y ${ROCM_META_PACKAGE}`.trim());
 }
 /**
-* Install ROCm via the distro's package manager (apt/dnf) (D-012)
+* Verify that `hipcc` exists under /opt/rocm/bin, as installed by apt/dnf or the runfile installer
+* @returns The path to the ROCm installation ("/opt/rocm")
+*/
+function verifyLinuxRocmInstall() {
+	const rocmPath = "/opt/rocm";
+	const hipcc = path.join(rocmPath, "bin", "hipcc");
+	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
+	return rocmPath;
+}
+/**
+* Install ROCm via the distro's package manager (apt/dnf)
 * @param version - Resolved ROCm version (e.g. "7.2.4")
 * @param distro - Linux distribution information
 * @param companion - Companion (graphics/amdgpu) repo resolved by `resolveCompanionRepo`
@@ -19700,13 +19719,10 @@ async function installPackageManager(version, distro, companion) {
 	if (isDebianBased(distro)) await installPackageManagerDebian(version, distro, companion);
 	else if (isFedoraBased(distro)) await installPackageManagerRhel(version, distro, companion);
 	else throw new Error(`Unsupported distribution for package-manager install: ${distro.id}`);
-	const rocmPath = "/opt/rocm";
-	const hipcc = path.join(rocmPath, "bin", "hipcc");
-	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
-	return rocmPath;
+	return verifyLinuxRocmInstall();
 }
 /**
-* Install ROCm via the runfile installer (D-013). Downloads the `.run` file to `RUNNER_TEMP`
+* Install ROCm via the runfile installer. Downloads the `.run` file to `RUNNER_TEMP`
 * and runs it there (its cwd, not the file's location, determines where it extracts and
 * cleans up its `rocm-installer/` working directory)
 * @param version - Resolved ROCm version (e.g. "10.0")
@@ -19715,7 +19731,7 @@ async function installPackageManager(version, distro, companion) {
 */
 async function installRunfile(version, distro) {
 	const url = await resolveRunfileUrl(version, distro);
-	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
+	const tempDir = getTempDir();
 	info(`Downloading ROCm runfile installer from ${url}...`);
 	const installerPath = await downloadTool(url, path.join(tempDir, path.basename(url)));
 	const isNewGenInstaller = path.basename(url).startsWith("rocm-installer-");
@@ -19726,13 +19742,10 @@ async function installRunfile(version, distro) {
 	await exec(`${sudoPrefix} bash ${installerPath} ${installArgs}`.trim(), void 0, { cwd: tempDir });
 	info("Cleaning up installer...");
 	await rmRF(installerPath);
-	const rocmPath = "/opt/rocm";
-	const hipcc = path.join(rocmPath, "bin", "hipcc");
-	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
-	return rocmPath;
+	return verifyLinuxRocmInstall();
 }
 /**
-* Install ROCm via the HIP SDK for Windows installer exe (D-004, D-011). The version-to-installer
+* Install ROCm via the HIP SDK for Windows installer exe. The version-to-installer
 * table has no machine-readable index, so mapping errors surface here: the extracted directory
 * name is checked after install, not just the download
 * @param input - Raw `version` input
@@ -19742,7 +19755,7 @@ async function installWindows(input) {
 	const resolved = findWindowsInstaller(input);
 	if (!resolved) throw notFoundError(input, [Object.keys(WINDOWS_HIP_SDK_INSTALLERS).join(", ")]);
 	const { version, url } = resolved;
-	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
+	const tempDir = getTempDir();
 	info(`Downloading ROCm HIP SDK installer for ${version} from ${url}...`);
 	const installerPath = path.win32.normalize(await downloadTool(url, path.win32.join(tempDir, `rocm-hip-sdk-${version}.exe`)));
 	const logPath = path.win32.join(tempDir, "rocm-install.log");
@@ -19777,8 +19790,7 @@ async function installWindows(input) {
 //#endregion
 //#region src/index.ts
 /**
-* Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux
-* (D-005, D-018).
+* Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux.
 * @param inputVersion - Raw `version` input
 * @param method - Parsed `method` input
 * @param distro - Linux distribution information
@@ -19823,7 +19835,7 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 	};
 }
 /**
-* Export ROCm environment variables and add its bin directory to PATH (D-007)
+* Export ROCm environment variables and add its bin directory to PATH
 * @param osType - Operating system type
 * @param rocmPath - Path to the ROCm installation
 */

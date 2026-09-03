@@ -1,5 +1,5 @@
 // WINDOWS_HIP_SDK_INSTALLERS: Maps a ROCm version to its HIP SDK for Windows installer URL.
-// AMD does not publish a machine-readable version index for the Windows installer (D-011),
+// AMD does not publish a machine-readable version index for the Windows installer,
 // so this table is hard-coded, the same way setup-cuda hard-codes CUDA_LINKS for versions
 // without a dynamic listing.
 export const WINDOWS_HIP_SDK_INSTALLERS: Record<string, string> = {
@@ -20,17 +20,17 @@ export const WINDOWS_HIP_SDK_INSTALLERS: Record<string, string> = {
 };
 
 /**
- * The rocm-hip-sdk meta-package installed via apt/dnf (D-003)
+ * The rocm-hip-sdk meta-package installed via apt/dnf
  */
 export const ROCM_META_PACKAGE = 'rocm-hip-sdk';
 
 /**
- * URL of the ROCm apt repository's GPG signing key (D-012)
+ * URL of the ROCm apt repository's GPG signing key
  */
 export const ROCM_GPG_KEY_URL = 'https://repo.radeon.com/rocm/rocm.gpg.key';
 
 /**
- * Debian-based ROCm apt repository URL for a given version, used in the sources.list entry (D-012)
+ * Debian-based ROCm apt repository URL for a given version, used in the sources.list entry
  * @param version - Resolved ROCm version (e.g. "7.2.4")
  * @returns The ROCm apt repository URL (no trailing slash)
  */
@@ -39,7 +39,7 @@ export function ROCM_APT_REPO_URL(version: string): string {
 }
 
 /**
- * RHEL-based ROCm dnf repository URL for a given major/version, used in the rocm.repo baseurl (D-009)
+ * RHEL-based ROCm dnf repository URL for a given major/version, used in the rocm.repo baseurl
  * @param major - RHEL major version (e.g. "9")
  * @param version - Resolved ROCm version (e.g. "7.2.4")
  * @returns The ROCm dnf repository URL (no trailing slash)
