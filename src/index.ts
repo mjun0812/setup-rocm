@@ -25,13 +25,12 @@ import {
   ROCM_EL_INDEX_URL,
   ROCM_RUNFILE_INDEX_URL,
 } from './rocm';
-import { installPackageManager } from './install';
+import { installPackageManager, installRunfile } from './install';
 import { getErrorMessage } from './utils';
 
 /**
  * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux
- * (D-005, D-018). The runfile route itself is not implemented yet; if it is selected, this
- * throws instead of installing.
+ * (D-005, D-018).
  * @param inputVersion - Raw `version` input
  * @param method - Parsed `method` input
  * @param distro - Linux distribution information
@@ -45,14 +44,16 @@ async function resolveAndInstallLinux(
   const debianBased = isDebianBased(distro);
   const major = distro.version.split('.')[0];
   const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
-  const pmVersions = debianBased
-    ? await fetchAptVersions(distro.codename)
-    : await fetchElVersions(major);
 
   let version: string | undefined;
   let route: 'package-manager' | 'runfile' | undefined;
 
   if (method === 'package-manager' || method === 'auto') {
+    // Only fetch the package-manager version list for routes that can use it (D-005):
+    // `method: runfile` resolves solely against the runfile list below.
+    const pmVersions = debianBased
+      ? await fetchAptVersions(distro.codename)
+      : await fetchElVersions(major);
     version = findRocmVersion(inputVersion, pmVersions);
     if (version) {
       route = 'package-manager';
@@ -94,8 +95,8 @@ async function resolveAndInstallLinux(
     }
   }
 
-  // route === 'runfile': not implemented in this build
-  throw new Error('runfile method is not supported yet on this build');
+  const rocmPath = await installRunfile(version!, distro);
+  return { version: version!, rocmPath };
 }
 
 /**

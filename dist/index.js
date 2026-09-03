@@ -17860,6 +17860,36 @@ function selectFallbackAfterInstallFailure(version, runfileVersions) {
 	return runfileVersions.includes(version) ? "runfile" : void 0;
 }
 /**
+* Fetch a directory index and pick out the `.run` file entry, if any
+* @param client - HttpClient used to fetch the index
+* @param url - Directory index URL
+* @returns The `.run` filename found at this index, or undefined if the index does not
+* exist (non-200) or contains no `.run` file
+*/
+async function findRunfileInIndex(client, url) {
+	const response = await client.get(url);
+	if (response.message.statusCode !== 200) return;
+	return parseIndexLinks(await response.readBody()).find((entry) => !entry.endsWith("/") && entry.endsWith(".run"));
+}
+/**
+* Resolve the `.run` installer URL for a ROCm version from the runfile installer directory index
+* The `.run` file is either directly under the release directory (e.g. 7.14.1), or under a
+* distro-specific subdirectory (`ubuntu/<VERSION_ID>/` or `el<major>/`, e.g. 7.2.4)
+* @param version - Resolved ROCm version (e.g. "7.2.4")
+* @param distro - Linux distribution information used to pick the distro-specific subdirectory
+* @returns Promise that resolves to the `.run` installer URL
+*/
+async function resolveRunfileUrl(version, distro) {
+	const client = new HttpClient("setup-rocm");
+	const releaseUrl = `${ROCM_RUNFILE_INDEX_URL}rocm-rel-${version}/`;
+	const runFile = await findRunfileInIndex(client, releaseUrl);
+	if (runFile) return `${releaseUrl}${runFile}`;
+	const subdirUrl = `${releaseUrl}${isDebianBased(distro) ? `ubuntu/${distro.version}/` : `el${distro.version.split(".")[0]}/`}`;
+	const subdirRunFile = await findRunfileInIndex(client, subdirUrl);
+	if (subdirRunFile) return `${subdirUrl}${subdirRunFile}`;
+	throw new Error(`ROCm runfile installer for version ${version} was not found. Checked: ${releaseUrl}, ${subdirUrl}`);
+}
+/**
 * Select the RHEL companion repo `<osver>` directory from an index of available osvers
 * Prefers an exact match on `VERSION_ID`; otherwise falls back to the largest osver within
 * the same major version (e.g. VERSION_ID "9.5" falls back among "9", "9.4", "9.7", ...)
@@ -19648,12 +19678,34 @@ async function installPackageManager(version, distro, companion) {
 	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
 	return rocmPath;
 }
+/**
+* Install ROCm via the runfile installer (D-013). Downloads the `.run` file to `RUNNER_TEMP`
+* and runs it there (its cwd, not the file's location, determines where it extracts and
+* cleans up its `rocm-installer/` working directory)
+* @param version - Resolved ROCm version (e.g. "10.0")
+* @param distro - Linux distribution information (used to resolve the `.run` URL)
+* @returns The path to the ROCm installation ("/opt/rocm")
+*/
+async function installRunfile(version, distro) {
+	const url = await resolveRunfileUrl(version, distro);
+	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
+	info(`Downloading ROCm runfile installer from ${url}...`);
+	const installerPath = await downloadTool(url, path.join(tempDir, path.basename(url)));
+	const sudoPrefix = getSudoPrefix();
+	info(`Installing ROCm ${version} via runfile installer...`);
+	await exec(`${sudoPrefix} bash ${installerPath} rocm target=/ deps=install postrocm`.trim(), void 0, { cwd: tempDir });
+	info("Cleaning up installer...");
+	await rmRF(installerPath);
+	const rocmPath = "/opt/rocm";
+	const hipcc = path.join(rocmPath, "bin", "hipcc");
+	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
+	return rocmPath;
+}
 //#endregion
 //#region src/index.ts
 /**
 * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux
-* (D-005, D-018). The runfile route itself is not implemented yet; if it is selected, this
-* throws instead of installing.
+* (D-005, D-018).
 * @param inputVersion - Raw `version` input
 * @param method - Parsed `method` input
 * @param distro - Linux distribution information
@@ -19663,11 +19715,10 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 	const debianBased = isDebianBased(distro);
 	const major = distro.version.split(".")[0];
 	const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
-	const pmVersions = debianBased ? await fetchAptVersions(distro.codename) : await fetchElVersions(major);
 	let version;
 	let route;
 	if (method === "package-manager" || method === "auto") {
-		version = findRocmVersion(inputVersion, pmVersions);
+		version = findRocmVersion(inputVersion, debianBased ? await fetchAptVersions(distro.codename) : await fetchElVersions(major));
 		if (version) route = "package-manager";
 		else if (method === "package-manager") throw notFoundError(inputVersion, [pmIndexUrl]);
 	}
@@ -19692,7 +19743,11 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 			route = "runfile";
 		} else throw installError;
 	}
-	throw new Error("runfile method is not supported yet on this build");
+	const rocmPath = await installRunfile(version, distro);
+	return {
+		version,
+		rocmPath
+	};
 }
 /**
 * Export ROCm environment variables and add its bin directory to PATH (D-007)

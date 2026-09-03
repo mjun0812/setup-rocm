@@ -4,8 +4,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as tc from '@actions/tool-cache';
+import * as io from '@actions/io';
 import { LinuxDistribution, isDebianBased, isFedoraBased } from './os_arch';
 import { hasRootPrivileges } from './utils';
+import { resolveRunfileUrl } from './rocm';
 import { ROCM_GPG_KEY_URL, ROCM_APT_REPO_URL, ROCM_EL_REPO_URL, ROCM_META_PACKAGE } from './const';
 
 /**
@@ -207,6 +209,40 @@ export async function installPackageManager(
   } else {
     throw new Error(`Unsupported distribution for package-manager install: ${distro.id}`);
   }
+
+  const rocmPath = '/opt/rocm';
+  const hipcc = path.join(rocmPath, 'bin', 'hipcc');
+  if (!fs.existsSync(hipcc)) {
+    throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
+  }
+  return rocmPath;
+}
+
+/**
+ * Install ROCm via the runfile installer (D-013). Downloads the `.run` file to `RUNNER_TEMP`
+ * and runs it there (its cwd, not the file's location, determines where it extracts and
+ * cleans up its `rocm-installer/` working directory)
+ * @param version - Resolved ROCm version (e.g. "10.0")
+ * @param distro - Linux distribution information (used to resolve the `.run` URL)
+ * @returns The path to the ROCm installation ("/opt/rocm")
+ */
+export async function installRunfile(version: string, distro: LinuxDistribution): Promise<string> {
+  const url = await resolveRunfileUrl(version, distro);
+  const tempDir = process.env['RUNNER_TEMP'] || os.tmpdir();
+
+  core.info(`Downloading ROCm runfile installer from ${url}...`);
+  const installerPath = await tc.downloadTool(url, path.join(tempDir, path.basename(url)));
+
+  const sudoPrefix = getSudoPrefix();
+  core.info(`Installing ROCm ${version} via runfile installer...`);
+  await exec.exec(
+    `${sudoPrefix} bash ${installerPath} rocm target=/ deps=install postrocm`.trim(),
+    undefined,
+    { cwd: tempDir }
+  );
+
+  core.info('Cleaning up installer...');
+  await io.rmRF(installerPath);
 
   const rocmPath = '/opt/rocm';
   const hipcc = path.join(rocmPath, 'bin', 'hipcc');
