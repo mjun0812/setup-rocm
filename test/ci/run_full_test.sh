@@ -44,211 +44,231 @@ POLL_TIMEOUT="${POLL_TIMEOUT:-3600}"
 DISPATCH_WAIT_INTERVAL=3
 DISPATCH_WAIT_TIMEOUT=60
 
+# run id (databaseId) の形式。gh run list --json databaseId は常に数値。
+RUN_ID_RE='^[0-9]+$'
+
 log() {
-  echo "[run_full_test] $(date -u +%H:%M:%S) $*" >&2
+	echo "[run_full_test] $(date -u +%H:%M:%S) $*" >&2
 }
 
 fail() {
-  echo "[run_full_test] ERROR: $*" >&2
-  exit 1
+	echo "[run_full_test] ERROR: $*" >&2
+	exit 1
 }
 
 mkdir -p "${STATE_DIR}"
 
 run_id_file() {
-  local os="$1" version="$2" method="$3" key
-  key="$(printf '%s-%s-%s' "${os}" "${version}" "${method}" | tr '/: ' '___')"
-  echo "${STATE_DIR}/run-${key}.id"
+	local os="$1" version="$2" method="$3" key
+	key="$(printf '%s-%s-%s' "${os}" "${version}" "${method}" | tr '/: ' '___')"
+	echo "${STATE_DIR}/run-${key}.id"
 }
 
 do_push() {
-  log "push HEAD ($(git -C "${REPO_ROOT}" rev-parse --short HEAD)) to origin/${BRANCH}"
-  git -C "${REPO_ROOT}" push -u origin "HEAD:refs/heads/${BRANCH}"
+	log "push HEAD ($(git -C "${REPO_ROOT}" rev-parse --short HEAD)) to origin/${BRANCH}"
+	git -C "${REPO_ROOT}" push -u origin "HEAD:refs/heads/${BRANCH}"
 }
 
 # gh run list の直近5件から、before_ts より後に作られた workflow_dispatch run の
-# databaseId のうち最新のものを1つ返す (無ければ空文字)。
+# databaseId のうち最新のものを1つ返す (無ければ空文字)。databaseId は数値のみを信頼する。
 find_new_run_id() {
-  local before_ts="$1"
-  local best_id="" best_created="" rid rcreated revent
-  while IFS="$(printf '\t')" read -r rid rcreated revent; do
-    [ -z "${rid}" ] && continue
-    [ "${revent}" = "workflow_dispatch" ] || continue
-    if [[ "${rcreated}" > "${before_ts}" ]]; then
-      if [ -z "${best_created}" ] || [[ "${rcreated}" > "${best_created}" ]]; then
-        best_id="${rid}"
-        best_created="${rcreated}"
-      fi
-    fi
-  done < <(gh run list --workflow "${WORKFLOW}" --branch "${BRANCH}" \
-    --json databaseId,createdAt,event --limit 5 \
-    --jq '.[] | [(.databaseId|tostring), .createdAt, .event] | @tsv')
-  echo "${best_id}"
+	local before_ts="$1"
+	local best_id="" best_created="" rid rcreated revent
+	while IFS="$(printf '\t')" read -r rid rcreated revent; do
+		[ -z "${rid}" ] && continue
+		[[ "${rid}" =~ ${RUN_ID_RE} ]] || continue
+		[ "${revent}" = "workflow_dispatch" ] || continue
+		if [[ "${rcreated}" > "${before_ts}" ]]; then
+			if [ -z "${best_created}" ] || [[ "${rcreated}" > "${best_created}" ]]; then
+				best_id="${rid}"
+				best_created="${rcreated}"
+			fi
+		fi
+	done < <(gh run list --workflow "${WORKFLOW}" --branch "${BRANCH}" \
+		--json databaseId,createdAt,event --limit 5 \
+		--jq '.[] | [(.databaseId|tostring), .createdAt, .event] | @tsv')
+	echo "${best_id}"
 }
 
 dispatch_run() {
-  local os="$1" version="$2" method="$3"
-  local before_ts id waited
+	local os="$1" version="$2" method="$3"
+	local before_ts id waited
 
-  before_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	before_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  log "gh workflow run ${WORKFLOW} --ref ${BRANCH} -f os=${os} -f version=${version} -f method=${method}"
-  # bash の command substitution ($()) は内部の set -e を早期終了に使わないため、
-  # gh workflow run 自体の失敗はここで明示的に検知して即 fail() する
-  # (そうしないと後続の discovery ループが無駄に timeout まで回ってしまう)。
-  gh workflow run "${WORKFLOW}" --ref "${BRANCH}" \
-    -f "os=${os}" -f "version=${version}" -f "method=${method}" \
-    || fail "gh workflow run ${WORKFLOW} failed for os=${os} version=${version} method=${method}"
+	log "gh workflow run ${WORKFLOW} --ref ${BRANCH} -f os=${os} -f version=${version} -f method=${method}"
+	# bash の command substitution ($()) は内部の set -e を早期終了に使わないため、
+	# gh workflow run 自体の失敗はここで明示的に検知して即 fail() する
+	# (そうしないと後続の discovery ループが無駄に timeout まで回ってしまう)。
+	# 標準出力は /dev/null に捨てる: 新しめの gh は成功時に run URL を stdout に返すため、
+	# ここで捨てないと呼び出し元の `id="$(dispatch_run ...)"` が URL 行と
+	# 本来の databaseId 行を両方まとめて捕捉してしまう (これが今回の run id 抽出破損の原因)。
+	gh workflow run "${WORKFLOW}" --ref "${BRANCH}" \
+		-f "os=${os}" -f "version=${version}" -f "method=${method}" \
+		>/dev/null ||
+		fail "gh workflow run ${WORKFLOW} failed for os=${os} version=${version} method=${method}"
 
-  log "waiting for the dispatched run to appear in gh run list..."
-  waited=0
-  id=""
-  while [ "${waited}" -lt "${DISPATCH_WAIT_TIMEOUT}" ]; do
-    id="$(find_new_run_id "${before_ts}")"
-    [ -n "${id}" ] && break
-    sleep "${DISPATCH_WAIT_INTERVAL}"
-    waited=$((waited + DISPATCH_WAIT_INTERVAL))
-  done
+	log "waiting for the dispatched run to appear in gh run list..."
+	waited=0
+	id=""
+	while [ "${waited}" -lt "${DISPATCH_WAIT_TIMEOUT}" ]; do
+		id="$(find_new_run_id "${before_ts}")"
+		[ -n "${id}" ] && break
+		sleep "${DISPATCH_WAIT_INTERVAL}"
+		waited=$((waited + DISPATCH_WAIT_INTERVAL))
+	done
 
-  [ -n "${id}" ] || fail "could not find the dispatched run for os=${os} version=${version} method=${method} within ${DISPATCH_WAIT_TIMEOUT}s"
+	[ -n "${id}" ] || fail "could not find the dispatched run for os=${os} version=${version} method=${method} within ${DISPATCH_WAIT_TIMEOUT}s"
+	[[ "${id}" =~ ${RUN_ID_RE} ]] || fail "dispatched run id '${id}' is not numeric (os=${os} version=${version} method=${method})"
 
-  log "dispatched run id: ${id}"
-  echo "${id}" >"$(run_id_file "${os}" "${version}" "${method}")"
-  echo "${id}"
+	log "dispatched run id: ${id}"
+	echo "${id}" >"$(run_id_file "${os}" "${version}" "${method}")"
+	echo "${id}"
 }
 
 get_or_dispatch_run() {
-  # AC-2 が AC-1 と同じ run を使い回すためのヘルパー。
-  # run id のキャッシュが無ければ自分で dispatch する (単独実行でも動く)。
-  local os="$1" version="$2" method="$3" f
-  f="$(run_id_file "${os}" "${version}" "${method}")"
-  if [ -s "${f}" ]; then
-    log "reusing cached run id for os=${os} version=${version} method=${method}: $(cat "${f}")"
-    cat "${f}"
-  else
-    dispatch_run "${os}" "${version}" "${method}"
-  fi
+	# AC-1/AC-2 が同じ run を使い回すためのヘルパー。
+	# run id のキャッシュが無ければ (または壊れていれば) 自分で dispatch する (単独実行でも動く)。
+	local os="$1" version="$2" method="$3" f cached
+	f="$(run_id_file "${os}" "${version}" "${method}")"
+	if [ -s "${f}" ]; then
+		cached="$(cat "${f}")"
+		if [[ "${cached}" =~ ${RUN_ID_RE} ]]; then
+			log "reusing cached run id for os=${os} version=${version} method=${method}: ${cached}"
+			echo "${cached}"
+			return
+		fi
+		log "cached run id file ${f} does not contain a plain numeric run id; ignoring and re-dispatching"
+		rm -f "${f}"
+	fi
+	dispatch_run "${os}" "${version}" "${method}"
 }
 
 wait_run() {
-  local id="$1" waited=0 status="" conclusion
-  while [ "${waited}" -lt "${POLL_TIMEOUT}" ]; do
-    status="$(gh run view "${id}" --json status --jq .status)"
-    log "run ${id} status=${status} (${waited}s elapsed)"
-    [ "${status}" = "completed" ] && break
-    sleep "${POLL_INTERVAL}"
-    waited=$((waited + POLL_INTERVAL))
-  done
+	local id="$1" waited=0 status="" conclusion
+	[[ "${id}" =~ ${RUN_ID_RE} ]] || fail "wait_run: run id '${id}' is not numeric"
+	while [ "${waited}" -lt "${POLL_TIMEOUT}" ]; do
+		status="$(gh run view "${id}" --json status --jq .status)"
+		log "run ${id} status=${status} (${waited}s elapsed)"
+		[ "${status}" = "completed" ] && break
+		sleep "${POLL_INTERVAL}"
+		waited=$((waited + POLL_INTERVAL))
+	done
 
-  [ "${status}" = "completed" ] || fail "run ${id} did not complete within ${POLL_TIMEOUT}s (last status=${status})"
+	[ "${status}" = "completed" ] || fail "run ${id} did not complete within ${POLL_TIMEOUT}s (last status=${status})"
 
-  conclusion="$(gh run view "${id}" --json conclusion --jq .conclusion)"
-  echo "${conclusion}"
+	conclusion="$(gh run view "${id}" --json conclusion --jq .conclusion)"
+	echo "${conclusion}"
 }
 
 fetch_log() {
-  local id="$1" log_file="${STATE_DIR}/log-${id}.txt"
-  if [ ! -s "${log_file}" ]; then
-    log "fetching log for run ${id}"
-    gh run view "${id}" --log >"${log_file}"
-  fi
-  echo "${log_file}"
+	local id="$1"
+	local log_file="${STATE_DIR}/log-${id}.txt"
+	if [ ! -s "${log_file}" ]; then
+		log "fetching log for run ${id}"
+		gh run view "${id}" --log >"${log_file}"
+	fi
+	echo "${log_file}"
 }
 
 # AC-1: outputs (version / rocm-path) / 環境変数 (ROCM_PATH) / hipcc --version を検証する
 verify_outputs() {
-  local os="$1" version="$2" method="$3" version_regex="$4" expected_rocm_path="$5"
-  local id conclusion log_file out_version out_rocm_path env_rocm_path
+	local os="$1" version="$2" method="$3" version_regex="$4" expected_rocm_path="$5"
+	local id conclusion log_file out_version out_rocm_path env_rocm_path
 
-  id="$(dispatch_run "${os}" "${version}" "${method}")"
-  conclusion="$(wait_run "${id}")"
-  log "run ${id} (os=${os}) conclusion=${conclusion}"
-  [ "${conclusion}" = "success" ] || fail "run ${id} (os=${os}) did not succeed (conclusion=${conclusion})"
+	id="$(get_or_dispatch_run "${os}" "${version}" "${method}")"
+	[[ "${id}" =~ ${RUN_ID_RE} ]] || fail "verify_outputs: captured run id '${id}' is not numeric (os=${os})"
 
-  log_file="$(fetch_log "${id}")"
+	conclusion="$(wait_run "${id}")"
+	log "run ${id} (os=${os}) conclusion=${conclusion}"
+	[ "${conclusion}" = "success" ] || fail "run ${id} (os=${os}) did not succeed (conclusion=${conclusion})"
 
-  out_version="$(grep -oE 'outputs\.version=.*' "${log_file}" | tail -n1 | sed -E 's/^outputs\.version=//' | tr -d '\r')"
-  out_rocm_path="$(grep -oE 'outputs\.rocm-path=.*' "${log_file}" | tail -n1 | sed -E 's/^outputs\.rocm-path=//' | tr -d '\r')"
-  env_rocm_path="$(grep -oE 'ROCM_PATH=.*' "${log_file}" | tail -n1 | sed -E 's/^ROCM_PATH=//' | tr -d '\r')"
+	log_file="$(fetch_log "${id}")"
 
-  [ -n "${out_version}" ] || fail "run ${id} (os=${os}): outputs.version not found in log"
-  echo "${out_version}" | grep -qE "${version_regex}" || fail "run ${id} (os=${os}): outputs.version='${out_version}' does not match ${version_regex}"
+	out_version="$(grep -oE 'outputs\.version=.*' "${log_file}" | tail -n1 | sed -E 's/^outputs\.version=//' | tr -d '\r')"
+	out_rocm_path="$(grep -oE 'outputs\.rocm-path=.*' "${log_file}" | tail -n1 | sed -E 's/^outputs\.rocm-path=//' | tr -d '\r')"
+	env_rocm_path="$(grep -oE 'ROCM_PATH=.*' "${log_file}" | tail -n1 | sed -E 's/^ROCM_PATH=//' | tr -d '\r')"
 
-  [ "${out_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' != '${expected_rocm_path}'"
-  [ "${env_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' != '${expected_rocm_path}'"
+	[ -n "${out_version}" ] || fail "run ${id} (os=${os}): outputs.version not found in log"
+	echo "${out_version}" | grep -qE "${version_regex}" || fail "run ${id} (os=${os}): outputs.version='${out_version}' does not match ${version_regex}"
 
-  grep -qE 'hipcc --version|HIP version' "${log_file}" || fail "run ${id} (os=${os}): hipcc --version output not found in log"
+	[ "${out_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' != '${expected_rocm_path}'"
+	[ "${env_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' != '${expected_rocm_path}'"
 
-  log "AC-1 OK for os=${os}: version=${out_version} rocm-path=${out_rocm_path}"
+	grep -qE 'hipcc --version|HIP version' "${log_file}" || fail "run ${id} (os=${os}): hipcc --version output not found in log"
+
+	log "AC-1 OK for os=${os}: version=${out_version} rocm-path=${out_rocm_path}"
 }
 
 # AC-2: 最小 HIP ソースのクロスコンパイル (Cross-compile step) を検証する
 verify_cross_compile() {
-  local os="$1" version="$2" method="$3"
-  local id conclusion log_file step_conclusion
+	local os="$1" version="$2" method="$3"
+	local id conclusion log_file step_conclusion
 
-  id="$(get_or_dispatch_run "${os}" "${version}" "${method}")"
-  conclusion="$(wait_run "${id}")"
-  [ "${conclusion}" = "success" ] || fail "run ${id} (os=${os}) did not succeed (conclusion=${conclusion})"
+	id="$(get_or_dispatch_run "${os}" "${version}" "${method}")"
+	[[ "${id}" =~ ${RUN_ID_RE} ]] || fail "verify_cross_compile: captured run id '${id}' is not numeric (os=${os})"
 
-  step_conclusion="$(gh run view "${id}" --json jobs \
-    --jq '[.jobs[0].steps[] | select(.name | test("Cross-compile"; "i"))][0].conclusion // empty')"
-  [ -n "${step_conclusion}" ] || fail "run ${id} (os=${os}): no step with name containing 'Cross-compile' found"
-  [ "${step_conclusion}" = "success" ] || fail "run ${id} (os=${os}): Cross-compile step conclusion=${step_conclusion}"
+	conclusion="$(wait_run "${id}")"
+	[ "${conclusion}" = "success" ] || fail "run ${id} (os=${os}) did not succeed (conclusion=${conclusion})"
 
-  log_file="$(fetch_log "${id}")"
-  grep -qE -- '--offload-arch=gfx942' "${log_file}" || fail "run ${id} (os=${os}): --offload-arch=gfx942 not found in log"
+	step_conclusion="$(gh run view "${id}" --json jobs \
+		--jq '[.jobs[0].steps[] | select(.name | test("Cross-compile"; "i"))][0].conclusion // empty')"
+	[ -n "${step_conclusion}" ] || fail "run ${id} (os=${os}): no step with name containing 'Cross-compile' found"
+	[ "${step_conclusion}" = "success" ] || fail "run ${id} (os=${os}): Cross-compile step conclusion=${step_conclusion}"
 
-  log "AC-2 OK for os=${os}: Cross-compile step succeeded"
+	log_file="$(fetch_log "${id}")"
+	grep -qE -- '--offload-arch=gfx942' "${log_file}" || fail "run ${id} (os=${os}): --offload-arch=gfx942 not found in log"
+
+	log "AC-2 OK for os=${os}: Cross-compile step succeeded"
 }
 
 cmd_ac1() {
-  local os
-  for os in ubuntu-22.04 ubuntu-24.04; do
-    verify_outputs "${os}" latest package-manager '^[0-9]+\.[0-9]+\.[0-9]+$' /opt/rocm
-  done
+	local os
+	for os in ubuntu-22.04 ubuntu-24.04; do
+		verify_outputs "${os}" latest package-manager '^[0-9]+\.[0-9]+\.[0-9]+$' /opt/rocm
+	done
 }
 
 cmd_ac2() {
-  local os
-  for os in ubuntu-22.04 ubuntu-24.04; do
-    verify_cross_compile "${os}" latest package-manager
-  done
+	local os
+	for os in ubuntu-22.04 ubuntu-24.04; do
+		verify_cross_compile "${os}" latest package-manager
+	done
 }
 
 main() {
-  local cmd="${1:-}"
-  case "${cmd}" in
-  push)
-    do_push
-    ;;
-  dispatch)
-    shift
-    dispatch_run "$@"
-    ;;
-  wait)
-    shift
-    wait_run "$@"
-    ;;
-  verify)
-    shift
-    verify_outputs "$@"
-    ;;
-  cross-compile)
-    shift
-    verify_cross_compile "$@"
-    ;;
-  ac1)
-    cmd_ac1
-    ;;
-  ac2)
-    cmd_ac2
-    ;;
-  *)
-    echo "usage: $0 {push|dispatch|wait|verify|cross-compile|ac1|ac2} [args...]" >&2
-    exit 2
-    ;;
-  esac
+	local cmd="${1:-}"
+	case "${cmd}" in
+	push)
+		do_push
+		;;
+	dispatch)
+		shift
+		dispatch_run "$@"
+		;;
+	wait)
+		shift
+		wait_run "$@"
+		;;
+	verify)
+		shift
+		verify_outputs "$@"
+		;;
+	cross-compile)
+		shift
+		verify_cross_compile "$@"
+		;;
+	ac1)
+		cmd_ac1
+		;;
+	ac2)
+		cmd_ac2
+		;;
+	*)
+		echo "usage: $0 {push|dispatch|wait|verify|cross-compile|ac1|ac2} [args...]" >&2
+		exit 2
+		;;
+	esac
 }
 
 main "$@"
