@@ -1,0 +1,36 @@
+name: mjun0812/setup-rocm
+description: Set up a specific version of AMD ROCm in GitHub Actions.
+author: mjun0812
+
+branding:
+  icon: box
+  color: red
+
+inputs:
+  version:
+    description: |
+      The version of AMD ROCm to install.
+      If this value is not specified, the latest version will be installed.
+      This value is accepted in the `Major.Minor.Patch` or `Major.Minor` format.
+      If the Patch version is not specified, the latest Patch version will be installed.
+      For example, '7.2.4' or '7.2'.
+    default: latest
+  method:
+    description: |
+      The method to use to install ROCm. (package-manager, runfile, auto)
+      If this value is not specified, the auto method will be used.
+      The auto method will try to install ROCm using the package-manager method first, and if it fails, it will try to install ROCm using the runfile method.
+      The package-manager method installs ROCm from AMD's official apt/dnf repository.
+      The runfile method downloads and runs AMD's official runfile installer.
+      This input is only used on Linux and is ignored on Windows.
+    default: auto
+
+outputs:
+  version:
+    description: The version of AMD ROCm that was installed.
+  rocm-path:
+    description: The path to the AMD ROCm installation.
+
+runs:
+  using: node24
+  main: dist/index.js

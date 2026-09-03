@@ -1,0 +1,44 @@
+{
+  "name": "setup-rocm",
+  "version": "1.0.0",
+  "description": "Set up a specific version of AMD ROCm in GitHub Actions",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "vp pack",
+    "format": "vp fmt src test",
+    "format:check": "vp fmt --check src test",
+    "lint": "vp lint src test",
+    "lint:fix": "vp lint src test --fix",
+    "typecheck": "tsc --noEmit",
+    "check": "vp check",
+    "check:fix": "vp check --fix",
+    "test": "vp test run",
+    "test:watch": "vp test",
+    "test:coverage": "vp test run --coverage",
+    "all": "vp check && tsc --noEmit && vp test run && vp pack",
+    "prepare": "vp config"
+  },
+  "keywords": [
+    "actions",
+    "rocm",
+    "amd"
+  ],
+  "author": "mjun0812",
+  "license": "MIT",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.0",
+    "@actions/exec": "^3.0.0",
+    "@actions/http-client": "^4.0.0",
+    "@actions/io": "^3.0.0",
+    "@actions/tool-cache": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^7.0.0",
+    "vite-plus": "catalog:"
+  }
+}
