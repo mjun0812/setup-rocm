@@ -170,6 +170,10 @@ export async function fetchRunfileVersions(): Promise<string[]> {
 /**
  * Find a matching ROCm version from an available versions list
  * Non-numeric entries (e.g., "7.0_alpha", "latest") are excluded before matching
+ * A `Major.Minor.Patch` input resolves only via exact match; a `Major` or `Major.Minor`
+ * input always resolves to the latest version among itself and its `input.`-prefixed
+ * entries, even when the input string is itself a listed entry (e.g. "7.14" resolves to
+ * "7.14.1", not "7.14", when both are listed) (D-020)
  * @param input - Version string to match (e.g., "latest", "7", "7.2", "7.2.4")
  * @param versions - Available version strings (may include non-numeric entries)
  * @returns The matched version string, or undefined if not found
@@ -188,20 +192,16 @@ export function findRocmVersion(input: string, versions: string[]): string | und
     return available[available.length - 1];
   }
 
-  // Case 2: Exact match
-  if (available.includes(input)) {
-    return input;
+  // Case 2: Major.Minor.Patch (3 elements) resolves via exact match only
+  if (input.split('.').length >= 3) {
+    return available.includes(input) ? input : undefined;
   }
 
-  // Case 3: Prefix match (e.g., "7" matches "7.x", "7.2" matches "7.2.x")
+  // Case 3: Major / Major.Minor (fewer than 3 elements) resolves to the latest among
+  // itself and its "input." prefixed entries (e.g. "7" matches "7.x", "7.2" matches "7.2.x")
   const prefix = `${input}.`;
-  const matching = available.filter((version) => version.startsWith(prefix));
-  if (matching.length > 0) {
-    return matching[matching.length - 1];
-  }
-
-  // Case 4: No match found
-  return undefined;
+  const matching = available.filter((version) => version === input || version.startsWith(prefix));
+  return matching.length > 0 ? matching[matching.length - 1] : undefined;
 }
 
 /**

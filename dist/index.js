@@ -17822,6 +17822,10 @@ async function fetchRunfileVersions() {
 /**
 * Find a matching ROCm version from an available versions list
 * Non-numeric entries (e.g., "7.0_alpha", "latest") are excluded before matching
+* A `Major.Minor.Patch` input resolves only via exact match; a `Major` or `Major.Minor`
+* input always resolves to the latest version among itself and its `input.`-prefixed
+* entries, even when the input string is itself a listed entry (e.g. "7.14" resolves to
+* "7.14.1", not "7.14", when both are listed) (D-020)
 * @param input - Version string to match (e.g., "latest", "7", "7.2", "7.2.4")
 * @param versions - Available version strings (may include non-numeric entries)
 * @returns The matched version string, or undefined if not found
@@ -17835,10 +17839,10 @@ async function fetchRunfileVersions() {
 function findRocmVersion(input, versions) {
 	const available = filterNumericVersions(versions);
 	if (input === "latest") return available[available.length - 1];
-	if (available.includes(input)) return input;
+	if (input.split(".").length >= 3) return available.includes(input) ? input : void 0;
 	const prefix = `${input}.`;
-	const matching = available.filter((version) => version.startsWith(prefix));
-	if (matching.length > 0) return matching[matching.length - 1];
+	const matching = available.filter((version) => version === input || version.startsWith(prefix));
+	return matching.length > 0 ? matching[matching.length - 1] : void 0;
 }
 /**
 * Build the error raised when a ROCm `version` input cannot be resolved
@@ -19692,8 +19696,8 @@ async function installRunfile(version, distro) {
 	info(`Downloading ROCm runfile installer from ${url}...`);
 	const installerPath = await downloadTool(url, path.join(tempDir, path.basename(url)));
 	const isNewGenInstaller = path.basename(url).startsWith("rocm-installer-");
-	const installArgs = isNewGenInstaller ? "rocm target=/ deps=install postrocm gfx=all" : "rocm target=/ deps=install postrocm";
-	if (isNewGenInstaller) info("New-generation runfile installer detected; passing gfx=all to skip GPU auto-detection.");
+	const installArgs = isNewGenInstaller ? "rocm target=/ deps=install postrocm gfx=all compo=core-sdk" : "rocm target=/ deps=install postrocm";
+	if (isNewGenInstaller) info("New-generation runfile installer detected; passing gfx=all compo=core-sdk to skip GPU auto-detection and install the complete SDK.");
 	const sudoPrefix = getSudoPrefix();
 	info(`Installing ROCm ${version} via runfile installer...`);
 	await exec(`${sudoPrefix} bash ${installerPath} ${installArgs}`.trim(), void 0, { cwd: tempDir });

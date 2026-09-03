@@ -44,6 +44,14 @@ POLL_TIMEOUT="${POLL_TIMEOUT:-3600}"
 DISPATCH_WAIT_INTERVAL=3
 DISPATCH_WAIT_TIMEOUT=60
 
+# dispatch -> run id 特定 -> .state/*.id への記録 を直列化するロック。
+# 複数プロセスを同時に起動すると、それぞれの `gh workflow run` 直後の
+# find_new_run_id が「dispatch 後に作られた最新の run」を選ぶため、
+# 両方が同じ run を掴んでしまう競合が起きる。この区間を mkdir (atomic) で
+# 直列化して防ぐ。
+DISPATCH_LOCK_DIR="${STATE_DIR}/.dispatch.lock"
+DISPATCH_LOCK_TIMEOUT="${DISPATCH_LOCK_TIMEOUT:-120}"
+
 # run id (databaseId) の形式。gh run list --json databaseId は常に数値。
 RUN_ID_RE='^[0-9]+$'
 
@@ -64,6 +72,39 @@ run_id_file() {
 	echo "${STATE_DIR}/run-${key}.id"
 }
 
+# .state/run-*.id に既に記録済みの run id 一覧 (前後に空白付きの1行) を返す。
+# 同時実行中の他プロセスが既に claim した run を、新たな dispatch の
+# discovery で再び拾わないようにするための除外リストとして使う。
+claimed_run_ids() {
+	local f v ids=""
+	for f in "${STATE_DIR}"/run-*.id; do
+		[ -f "${f}" ] || continue
+		v="$(cat "${f}" 2>/dev/null || true)"
+		[[ "${v}" =~ ${RUN_ID_RE} ]] || continue
+		ids="${ids} ${v}"
+	done
+	echo " ${ids} "
+}
+
+# dispatch -> run id 特定 -> .state/*.id への記録 の区間用ロック。
+# mkdir はディレクトリが既に存在すると失敗するため atomic に排他できる。
+acquire_dispatch_lock() {
+	local waited=0
+	while ! mkdir "${DISPATCH_LOCK_DIR}" 2>/dev/null; do
+		waited=$((waited + 1))
+		if [ "${waited}" -gt "${DISPATCH_LOCK_TIMEOUT}" ]; then
+			fail "could not acquire dispatch lock (${DISPATCH_LOCK_DIR}) within ${DISPATCH_LOCK_TIMEOUT}s (stale lock from a crashed process? remove it manually if so)"
+		fi
+		sleep 1
+	done
+	# fail() 経由の異常終了でもロックを解放できるよう、取得できた時点で trap する。
+	trap release_dispatch_lock EXIT
+}
+
+release_dispatch_lock() {
+	rmdir "${DISPATCH_LOCK_DIR}" 2>/dev/null || true
+}
+
 do_push() {
 	log "push HEAD ($(git -C "${REPO_ROOT}" rev-parse --short HEAD)) to origin/${BRANCH}"
 	git -C "${REPO_ROOT}" push -u origin "HEAD:refs/heads/${BRANCH}"
@@ -74,9 +115,14 @@ do_push() {
 find_new_run_id() {
 	local before_ts="$1"
 	local best_id="" best_created="" rid rcreated revent
+	local claimed
+	claimed="$(claimed_run_ids)"
 	while IFS="$(printf '\t')" read -r rid rcreated revent; do
 		[ -z "${rid}" ] && continue
 		[[ "${rid}" =~ ${RUN_ID_RE} ]] || continue
+		case "${claimed}" in
+		*" ${rid} "*) continue ;;
+		esac
 		[ "${revent}" = "workflow_dispatch" ] || continue
 		if [[ "${rcreated}" > "${before_ts}" ]]; then
 			if [ -z "${best_created}" ] || [[ "${rcreated}" > "${best_created}" ]]; then
@@ -93,6 +139,11 @@ find_new_run_id() {
 dispatch_run() {
 	local os="$1" version="$2" method="$3"
 	local before_ts id waited
+
+	# dispatch -> run id 特定 -> .state/*.id への記録 を他プロセスと排他する。
+	# (同時に複数の verify/cross-compile を走らせたときに、互いの run を
+	# 取り違えないようにするための直列化。詳細は DISPATCH_LOCK_DIR の定義を参照。)
+	acquire_dispatch_lock
 
 	before_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -123,6 +174,11 @@ dispatch_run() {
 
 	log "dispatched run id: ${id}"
 	echo "${id}" >"$(run_id_file "${os}" "${version}" "${method}")"
+
+	# 他プロセスの dispatch を待たせ続けないよう、記録できた時点ですぐ解放する
+	# (このあとの wait_run は長時間かかるためロック範囲に含めない)。
+	release_dispatch_lock
+
 	echo "${id}"
 }
 
