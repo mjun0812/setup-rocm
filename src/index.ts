@@ -1,6 +1,120 @@
 import * as core from '@actions/core';
-import { getOS, getArch, OS, getLinuxDistribution, getWindowsVersion } from './os_arch';
-import { parseMethod } from './rocm';
+import * as path from 'path';
+import {
+  getOS,
+  getArch,
+  OS,
+  Arch,
+  LinuxDistribution,
+  getLinuxDistribution,
+  getWindowsVersion,
+  isDebianBased,
+  isFedoraBased,
+} from './os_arch';
+import {
+  parseMethod,
+  InstallMethod,
+  findRocmVersion,
+  notFoundError,
+  selectFallbackAfterInstallFailure,
+  resolveCompanionRepo,
+  fetchAptVersions,
+  fetchElVersions,
+  fetchRunfileVersions,
+  ROCM_APT_INDEX_URL,
+  ROCM_EL_INDEX_URL,
+  ROCM_RUNFILE_INDEX_URL,
+} from './rocm';
+import { installPackageManager } from './install';
+import { getErrorMessage } from './utils';
+
+/**
+ * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux
+ * (D-005, D-018). The runfile route itself is not implemented yet; if it is selected, this
+ * throws instead of installing.
+ * @param inputVersion - Raw `version` input
+ * @param method - Parsed `method` input
+ * @param distro - Linux distribution information
+ * @returns The resolved version and the path to the ROCm installation
+ */
+async function resolveAndInstallLinux(
+  inputVersion: string,
+  method: InstallMethod,
+  distro: LinuxDistribution
+): Promise<{ version: string; rocmPath: string }> {
+  const debianBased = isDebianBased(distro);
+  const major = distro.version.split('.')[0];
+  const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
+  const pmVersions = debianBased
+    ? await fetchAptVersions(distro.codename)
+    : await fetchElVersions(major);
+
+  let version: string | undefined;
+  let route: 'package-manager' | 'runfile' | undefined;
+
+  if (method === 'package-manager' || method === 'auto') {
+    version = findRocmVersion(inputVersion, pmVersions);
+    if (version) {
+      route = 'package-manager';
+    } else if (method === 'package-manager') {
+      throw notFoundError(inputVersion, [pmIndexUrl]);
+    }
+  }
+
+  let runfileVersions: string[] | undefined;
+  if (!route) {
+    runfileVersions = await fetchRunfileVersions();
+    version = findRocmVersion(inputVersion, runfileVersions);
+    if (!version) {
+      const sourceUrls =
+        method === 'auto' ? [pmIndexUrl, ROCM_RUNFILE_INDEX_URL] : [ROCM_RUNFILE_INDEX_URL];
+      throw notFoundError(inputVersion, sourceUrls);
+    }
+    route = 'runfile';
+  }
+
+  if (route === 'package-manager') {
+    try {
+      const companion = await resolveCompanionRepo(version!, distro);
+      const rocmPath = await installPackageManager(version!, distro, companion);
+      return { version: version!, rocmPath };
+    } catch (installError) {
+      runfileVersions = runfileVersions ?? (await fetchRunfileVersions());
+      if (
+        method === 'auto' &&
+        selectFallbackAfterInstallFailure(version!, runfileVersions) === 'runfile'
+      ) {
+        core.info(
+          `package-manager install failed; retrying ${version} via runfile: ${getErrorMessage(installError)}`
+        );
+        route = 'runfile';
+      } else {
+        throw installError;
+      }
+    }
+  }
+
+  // route === 'runfile': not implemented in this build
+  throw new Error('runfile method is not supported yet on this build');
+}
+
+/**
+ * Export ROCm environment variables and add its bin directory to PATH (D-007)
+ * @param osType - Operating system type
+ * @param rocmPath - Path to the ROCm installation
+ */
+function setEnvironmentVariables(osType: OS, rocmPath: string): void {
+  core.exportVariable('ROCM_PATH', rocmPath);
+  core.exportVariable('ROCM_HOME', rocmPath);
+  core.exportVariable('HIP_PATH', rocmPath);
+  core.addPath(path.join(rocmPath, 'bin'));
+  if (osType === OS.LINUX) {
+    core.exportVariable(
+      'LD_LIBRARY_PATH',
+      `${path.join(rocmPath, 'lib')}:${process.env.LD_LIBRARY_PATH || ''}`
+    );
+  }
+}
 
 async function run(): Promise<void> {
   try {
@@ -9,8 +123,8 @@ async function run(): Promise<void> {
     core.info(`Input version: ${inputVersion}`);
 
     // Get input method
-    const inputMethod = parseMethod(core.getInput('method'));
-    core.info(`Input method: ${inputMethod}`);
+    const method = parseMethod(core.getInput('method'));
+    core.info(`Input method: ${method}`);
 
     // Get OS and architecture
     const osType = getOS();
@@ -18,18 +132,42 @@ async function run(): Promise<void> {
     core.info(`OS: ${osType}`);
     core.info(`Architecture: ${arch}`);
 
-    // Get Linux distribution or Windows version
+    if (arch !== Arch.X86_64) {
+      throw new Error(`ROCm is not supported on ${osType} with ${arch} architecture`);
+    }
+
+    let version: string;
+    let rocmPath: string;
+
     if (osType === OS.LINUX) {
-      const linuxDistribution = getLinuxDistribution();
+      const distro = getLinuxDistribution();
       core.info(
-        `Linux distribution: ${linuxDistribution.id} ${linuxDistribution.version} (${linuxDistribution.codename}) ${linuxDistribution.name} ${linuxDistribution.idLink}`
+        `Linux distribution: ${distro.id} ${distro.version} (${distro.codename}) ${distro.name} ${distro.idLink}`
       );
-    } else if (osType === OS.WINDOWS) {
+
+      if (!isDebianBased(distro) && !isFedoraBased(distro)) {
+        throw new Error(`Unsupported Linux distribution: ${distro.id}`);
+      }
+
+      const result = await resolveAndInstallLinux(inputVersion, method, distro);
+      version = result.version;
+      rocmPath = result.rocmPath;
+    } else {
+      // Windows support is added in a later task
       const windowsVersion = getWindowsVersion();
       core.info(
         `Windows version: ${windowsVersion.name} (${windowsVersion.release}, build ${windowsVersion.build})`
       );
+      throw new Error('Windows support is not available yet on this build');
     }
+
+    // Set environment variables
+    setEnvironmentVariables(osType, rocmPath);
+
+    // Set outputs
+    core.setOutput('version', version);
+    core.setOutput('rocm-path', rocmPath);
+    core.info('ROCm installation completed successfully');
   } catch (error) {
     if (error instanceof Error) {
       core.setFailed(error.message);

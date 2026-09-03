@@ -18,3 +18,22 @@ export const WINDOWS_HIP_SDK_INSTALLERS: Record<string, string> = {
   '7.2.0':
     'https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-26.Q3-Win11-For-HIP.exe',
 };
+
+/**
+ * The rocm-hip-sdk meta-package installed via apt/dnf (D-003)
+ */
+export const ROCM_META_PACKAGE = 'rocm-hip-sdk';
+
+/**
+ * URL of the ROCm apt repository's GPG signing key (D-012)
+ */
+export const ROCM_GPG_KEY_URL = 'https://repo.radeon.com/rocm/rocm.gpg.key';
+
+/**
+ * Debian-based ROCm apt repository URL for a given version, used in the sources.list entry (D-012)
+ * @param version - Resolved ROCm version (e.g. "7.2.4")
+ * @returns The ROCm apt repository URL (no trailing slash)
+ */
+export function ROCM_APT_REPO_URL(version: string): string {
+  return `https://repo.radeon.com/rocm/apt/${version}`;
+}

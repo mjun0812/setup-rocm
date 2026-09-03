@@ -1,0 +1,108 @@
+name: _Test
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: 'OS to test'
+        required: true
+        type: string
+      version:
+        description: 'ROCm version to test'
+        required: true
+        type: string
+      method:
+        description: 'Method to test'
+        required: true
+        type: string
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  Test:
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    env:
+      ACTIONS_STEP_DEBUG: ${{ inputs.debug }}
+      ACTIONS_RUNNER_DEBUG: ${{ inputs.debug }}
+
+    steps:
+      - name: Expand Disk Space
+        if: runner.os == 'Linux'
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          echo "-------"
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+          node-version-file: .node-version
+
+      - name: Build
+        run: vp pack
+
+      - name: Test Local Action
+        id: setup-rocm
+        uses: ./
+        with:
+          version: ${{ inputs.version }}
+          method: ${{ inputs.method }}
+
+      - name: Verify ROCm Installation (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
+          echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
+
+          echo "PATH: $PATH"
+
+          # Check if ROCM_PATH is set
+          if [ -z "$ROCM_PATH" ]; then
+            echo "Error: ROCM_PATH is not set"
+            exit 1
+          fi
+          echo "ROCM_PATH=$ROCM_PATH"
+
+          ls "$ROCM_PATH"
+          ls "$ROCM_PATH/bin"
+
+          # Check if hipcc exists
+          if command -v hipcc &> /dev/null; then
+            echo "hipcc found at: $(which hipcc)"
+            hipcc --version
+          else
+            echo "Error: hipcc not found in PATH"
+            exit 1
+          fi
+
+          echo "ROCm installation verified successfully"
+
+      - name: Cross-compile HIP kernel (gfx942)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cat <<EOF > "$RUNNER_TEMP/kernel.hip"
+          #include <hip/hip_runtime.h>
+
+          __global__ void add(const float* a, const float* b, float* c, int n) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n) c[i] = a[i] + b[i];
+          }
+          EOF
+
+          hipcc --offload-arch=gfx942 -c "$RUNNER_TEMP/kernel.hip" -o "$RUNNER_TEMP/kernel.o"
+          test -s "$RUNNER_TEMP/kernel.o"
