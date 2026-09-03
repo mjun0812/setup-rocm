@@ -19691,9 +19691,12 @@ async function installRunfile(version, distro) {
 	const tempDir = process.env["RUNNER_TEMP"] || os.tmpdir();
 	info(`Downloading ROCm runfile installer from ${url}...`);
 	const installerPath = await downloadTool(url, path.join(tempDir, path.basename(url)));
+	const isNewGenInstaller = path.basename(url).startsWith("rocm-installer-");
+	const installArgs = isNewGenInstaller ? "rocm target=/ deps=install postrocm gfx=all" : "rocm target=/ deps=install postrocm";
+	if (isNewGenInstaller) info("New-generation runfile installer detected; passing gfx=all to skip GPU auto-detection.");
 	const sudoPrefix = getSudoPrefix();
 	info(`Installing ROCm ${version} via runfile installer...`);
-	await exec(`${sudoPrefix} bash ${installerPath} rocm target=/ deps=install postrocm`.trim(), void 0, { cwd: tempDir });
+	await exec(`${sudoPrefix} bash ${installerPath} ${installArgs}`.trim(), void 0, { cwd: tempDir });
 	info("Cleaning up installer...");
 	await rmRF(installerPath);
 	const rocmPath = "/opt/rocm";

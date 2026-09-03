@@ -233,13 +233,24 @@ export async function installRunfile(version: string, distro: LinuxDistribution)
   core.info(`Downloading ROCm runfile installer from ${url}...`);
   const installerPath = await tc.downloadTool(url, path.join(tempDir, path.basename(url)));
 
+  // The new-generation (TheRock-based) runfile installer auto-detects the GPU when `gfx=`
+  // is omitted and fails on GPU-less runners; `gfx=all` installs every architecture it
+  // bundles instead (D-019). The old-generation installer doesn't accept `gfx=`.
+  const isNewGenInstaller = path.basename(url).startsWith('rocm-installer-');
+  const installArgs = isNewGenInstaller
+    ? 'rocm target=/ deps=install postrocm gfx=all'
+    : 'rocm target=/ deps=install postrocm';
+  if (isNewGenInstaller) {
+    core.info(
+      'New-generation runfile installer detected; passing gfx=all to skip GPU auto-detection.'
+    );
+  }
+
   const sudoPrefix = getSudoPrefix();
   core.info(`Installing ROCm ${version} via runfile installer...`);
-  await exec.exec(
-    `${sudoPrefix} bash ${installerPath} rocm target=/ deps=install postrocm`.trim(),
-    undefined,
-    { cwd: tempDir }
-  );
+  await exec.exec(`${sudoPrefix} bash ${installerPath} ${installArgs}`.trim(), undefined, {
+    cwd: tempDir,
+  });
 
   core.info('Cleaning up installer...');
   await io.rmRF(installerPath);
