@@ -17784,17 +17784,25 @@ function filterNumericVersions(entries) {
 	return sortVersions(entries.filter((entry) => NUMERIC_VERSION_PATTERN.test(entry)));
 }
 /**
-* Check whether a URL exists (returns HTTP 200)
+* Check whether a URL exists.
+* Only a definite answer is returned: HTTP 200 means it exists and HTTP 404 means it does not.
+* Any other status or a network failure is an error, so a transient outage never silently
+* drops a version from the candidates.
 * @param url - The URL to check
-* @returns Promise that resolves to true if the URL responds with HTTP 200
+* @returns Promise that resolves to true if the URL responds with HTTP 200, false on HTTP 404
 */
 async function urlExists(url) {
 	const client = new HttpClient("setup-rocm");
+	let response;
 	try {
-		return (await client.head(url)).message.statusCode === 200;
-	} catch {
-		return false;
+		response = await client.head(url);
+	} catch (error) {
+		throw new Error(`Failed to check ${url}: ${getErrorMessage(error)}`);
 	}
+	const statusCode = response.message.statusCode;
+	if (statusCode === 200) return true;
+	if (statusCode === 404) return false;
+	throw new Error(`Failed to check ${url}: ${statusCode} ${response.message.statusMessage}`);
 }
 /**
 * Fetch available ROCm versions from the apt repository that are published for the given codename

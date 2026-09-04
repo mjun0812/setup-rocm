@@ -1,5 +1,5 @@
 import { HttpClient } from '@actions/http-client';
-import { sortVersions } from './utils';
+import { sortVersions, getErrorMessage } from './utils';
 import { isDebianBased, LinuxDistribution } from './os_arch';
 import { WINDOWS_HIP_SDK_INSTALLERS } from './const';
 
@@ -94,18 +94,29 @@ function filterNumericVersions(entries: string[]): string[] {
 }
 
 /**
- * Check whether a URL exists (returns HTTP 200)
+ * Check whether a URL exists.
+ * Only a definite answer is returned: HTTP 200 means it exists and HTTP 404 means it does not.
+ * Any other status or a network failure is an error, so a transient outage never silently
+ * drops a version from the candidates.
  * @param url - The URL to check
- * @returns Promise that resolves to true if the URL responds with HTTP 200
+ * @returns Promise that resolves to true if the URL responds with HTTP 200, false on HTTP 404
  */
 export async function urlExists(url: string): Promise<boolean> {
   const client = new HttpClient('setup-rocm');
+  let response;
   try {
-    const response = await client.head(url);
-    return response.message.statusCode === 200;
-  } catch {
+    response = await client.head(url);
+  } catch (error) {
+    throw new Error(`Failed to check ${url}: ${getErrorMessage(error)}`);
+  }
+  const statusCode = response.message.statusCode;
+  if (statusCode === 200) {
+    return true;
+  }
+  if (statusCode === 404) {
     return false;
   }
+  throw new Error(`Failed to check ${url}: ${statusCode} ${response.message.statusMessage}`);
 }
 
 /**
