@@ -47,6 +47,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 STATE_DIR="${STATE_DIR:-${SCRIPT_DIR}/.state}"
 WORKFLOW="full-test.yml"
 BRANCH="feat/setup-rocm"
