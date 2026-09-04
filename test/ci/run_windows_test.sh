@@ -40,6 +40,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RUN_FULL_TEST="${SCRIPT_DIR}/run_full_test.sh"
 STATE_DIR="${STATE_DIR:-${SCRIPT_DIR}/.state}"
 
@@ -90,6 +91,16 @@ dispatch_and_wait() {
 	echo "${id}"
 }
 
+
+# キャッシュ済み run は headSha が現在の HEAD と一致するときだけ再利用する
+# (別 commit の成功 run を現在の変更の証拠にしないため。dispatch 側の
+# run_full_test.sh も origin/<branch> が HEAD と一致することを要求する)。
+run_matches_head() {
+	local id="$1" sha
+	sha="$(gh run view "${id}" --json headSha --jq .headSha)"
+	[ "${sha}" = "$(git -C "${REPO_ROOT}" rev-parse HEAD)" ]
+}
+
 # キャッシュされた run id があればそれを使い (完了を待ち直す)、無ければ dispatch する。
 get_or_dispatch_and_wait() {
 	local os="$1" version="$2" method="$3" f cached conclusion
@@ -97,10 +108,16 @@ get_or_dispatch_and_wait() {
 	if [ -s "${f}" ]; then
 		cached="$(cat "${f}")"
 		if [[ "${cached}" =~ ${RUN_ID_RE} ]]; then
-			log "reusing cached run id for os=${os} version=${version} method=${method}: ${cached}"
-			conclusion="$("${RUN_FULL_TEST}" wait "${cached}")"
-			[ "${conclusion}" = "success" ] || fail "run ${cached} (os=${os}) did not succeed (conclusion=${conclusion})"
-			echo "${cached}"
+			if run_matches_head "${cached}"; then
+				log "reusing cached run id for os=${os} version=${version} method=${method}: ${cached}"
+				conclusion="$("${RUN_FULL_TEST}" wait "${cached}")"
+				[ "${conclusion}" = "success" ] || fail "run ${cached} (os=${os}) did not succeed (conclusion=${conclusion})"
+				echo "${cached}"
+				return
+			fi
+			log "cached run ${cached} for os=${os} version=${version} method=${method} was built from another commit; re-dispatching"
+			rm -f "${f}"
+			dispatch_and_wait "${os}" "${version}" "${method}"
 			return
 		fi
 		log "cached run id file ${f} does not contain a plain numeric run id; ignoring and re-dispatching"
