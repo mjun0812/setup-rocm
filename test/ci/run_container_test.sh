@@ -112,6 +112,27 @@ release_dispatch_lock() {
 	rmdir "${DISPATCH_LOCK_DIR}" 2>/dev/null || true
 }
 
+# 検査対象の commit はローカル HEAD。dispatch は origin/${BRANCH} が HEAD と一致するときだけ行い、
+# キャッシュ済み run は headSha が HEAD と一致するときだけ再利用する (古い commit の成功 run を
+# 現在の変更の結果として扱わないため)。
+target_sha() {
+	git -C "${REPO_ROOT}" rev-parse HEAD
+}
+
+require_pushed_head() {
+	local head remote
+	head="$(target_sha)"
+	remote="$(git -C "${REPO_ROOT}" ls-remote origin "refs/heads/${BRANCH}" | cut -f1)"
+	[ "${remote}" = "${head}" ] ||
+		fail "origin/${BRANCH} (${remote:-none}) does not match HEAD (${head}); push HEAD first"
+}
+
+run_matches_head() {
+	local id="$1" sha
+	sha="$(gh run view "${id}" --json headSha --jq .headSha)"
+	[ "${sha}" = "$(target_sha)" ]
+}
+
 # gh run list の直近5件から、before_ts より後に作られた workflow_dispatch run の
 # databaseId のうち最新のものを1つ返す (無ければ空文字)。databaseId は数値のみを信頼する。
 find_new_run_id() {
@@ -146,6 +167,7 @@ dispatch_run() {
 	# (同時に複数の verify/cross-compile を走らせたときに、互いの run を
 	# 取り違えないようにするための直列化。詳細は DISPATCH_LOCK_DIR の定義を参照。)
 	acquire_dispatch_lock
+	require_pushed_head
 
 	before_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -192,8 +214,14 @@ get_or_dispatch_run() {
 	if [ -s "${f}" ]; then
 		cached="$(cat "${f}")"
 		if [[ "${cached}" =~ ${RUN_ID_RE} ]]; then
-			log "reusing cached run id for container=${container} version=${version} method=${method}: ${cached}"
-			echo "${cached}"
+			if run_matches_head "${cached}"; then
+				log "reusing cached run id for container=${container} version=${version} method=${method}: ${cached}"
+				echo "${cached}"
+				return
+			fi
+			log "cached run ${cached} for container=${container} version=${version} method=${method} was built from another commit; re-dispatching"
+			rm -f "${f}"
+			dispatch_run "${container}" "${version}" "${method}"
 			return
 		fi
 		log "cached run id file ${f} does not contain a plain numeric run id; ignoring and re-dispatching"
