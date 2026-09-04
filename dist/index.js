@@ -19844,7 +19844,11 @@ function setEnvironmentVariables(osType, rocmPath) {
 	exportVariable("ROCM_HOME", rocmPath);
 	exportVariable("HIP_PATH", rocmPath);
 	addPath(path.join(rocmPath, "bin"));
-	if (osType === "linux") exportVariable("LD_LIBRARY_PATH", `${path.join(rocmPath, "lib")}:${process.env.LD_LIBRARY_PATH || ""}`);
+	if (osType === "linux") {
+		const rocmLib = path.join(rocmPath, "lib");
+		const existing = process.env.LD_LIBRARY_PATH;
+		exportVariable("LD_LIBRARY_PATH", existing ? `${rocmLib}:${existing}` : rocmLib);
+	}
 }
 async function run() {
 	try {

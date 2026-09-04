@@ -109,10 +109,11 @@ function setEnvironmentVariables(osType: OS, rocmPath: string): void {
   core.exportVariable('HIP_PATH', rocmPath);
   core.addPath(path.join(rocmPath, 'bin'));
   if (osType === OS.LINUX) {
-    core.exportVariable(
-      'LD_LIBRARY_PATH',
-      `${path.join(rocmPath, 'lib')}:${process.env.LD_LIBRARY_PATH || ''}`
-    );
+    // Never leave an empty element (trailing ':'): the dynamic linker would
+    // search the current working directory for it.
+    const rocmLib = path.join(rocmPath, 'lib');
+    const existing = process.env.LD_LIBRARY_PATH;
+    core.exportVariable('LD_LIBRARY_PATH', existing ? `${rocmLib}:${existing}` : rocmLib);
   }
 }
 
