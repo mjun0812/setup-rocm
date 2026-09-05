@@ -24,7 +24,9 @@ import {
   ROCM_APT_INDEX_URL,
   ROCM_EL_INDEX_URL,
   ROCM_RUNFILE_INDEX_URL,
+  resolveAutoVersion,
 } from './rocm';
+import type { InstallRoute } from './rocm';
 import { installPackageManager, installRunfile, installWindows } from './install';
 import { getErrorMessage } from './utils';
 
@@ -45,33 +47,37 @@ async function resolveAndInstallLinux(
   const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
 
   let version: string | undefined;
-  let route: 'package-manager' | 'runfile' | undefined;
+  let route: InstallRoute | undefined;
+  let runfileVersions: string[] | undefined;
 
-  if (method === 'package-manager' || method === 'auto') {
-    // Only fetch the package-manager version list for routes that can use it:
-    // `method: runfile` resolves solely against the runfile list below.
-    const pmVersions = debianBased
-      ? await fetchAptVersions(distro.codename)
-      : await fetchElVersions(major);
-    version = findRocmVersion(inputVersion, pmVersions);
-    if (version) {
-      route = 'package-manager';
-    } else if (method === 'package-manager') {
+  const fetchPmVersions = () =>
+    debianBased ? fetchAptVersions(distro.codename) : fetchElVersions(major);
+
+  if (method === 'package-manager') {
+    version = findRocmVersion(inputVersion, await fetchPmVersions());
+    if (!version) {
       throw notFoundError(inputVersion, [pmIndexUrl]);
     }
-  }
-
-  let runfileVersions: string[] | undefined;
-  if (!route) {
+    route = 'package-manager';
+  } else if (method === 'runfile') {
     runfileVersions = await fetchRunfileVersions();
     version = findRocmVersion(inputVersion, runfileVersions);
     if (!version) {
-      const sourceUrls =
-        method === 'auto' ? [pmIndexUrl, ROCM_RUNFILE_INDEX_URL] : [ROCM_RUNFILE_INDEX_URL];
-      throw notFoundError(inputVersion, sourceUrls);
+      throw notFoundError(inputVersion, [ROCM_RUNFILE_INDEX_URL]);
     }
     route = 'runfile';
+  } else {
+    // auto: the newest match across both routes wins, so `latest` is the newest ROCm
+    // release even when only the runfile installer ships it.
+    const [pmVersions, rfVersions] = await Promise.all([fetchPmVersions(), fetchRunfileVersions()]);
+    runfileVersions = rfVersions;
+    const resolved = resolveAutoVersion(inputVersion, pmVersions, rfVersions);
+    if (!resolved) {
+      throw notFoundError(inputVersion, [pmIndexUrl, ROCM_RUNFILE_INDEX_URL]);
+    }
+    ({ version, route } = resolved);
   }
+  core.info(`Resolved ROCm ${version} via ${route}`);
 
   if (route === 'package-manager') {
     try {

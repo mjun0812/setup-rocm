@@ -17990,6 +17990,24 @@ function findWindowsInstaller(input) {
 		url: WINDOWS_HIP_SDK_INSTALLERS[version]
 	};
 }
+/**
+* Resolve a requested version for `method: auto` against every Linux route at once.
+* The newest match across the package-manager and runfile listings wins, so `latest`
+* always means the newest ROCm release regardless of which route ships it. A version
+* that both routes offer is installed via the package manager.
+* @param input - Requested version (latest / Major / Major.Minor / Major.Minor.Patch)
+* @param pmVersions - Versions available from the apt/dnf repository for this distro
+* @param runfileVersions - Versions available as runfile installers
+* @returns The resolved version and the route that provides it, or undefined if none matches
+*/
+function resolveAutoVersion(input, pmVersions, runfileVersions) {
+	const version = findRocmVersion(input, [...pmVersions, ...runfileVersions]);
+	if (!version) return;
+	return {
+		version,
+		route: pmVersions.includes(version) ? "package-manager" : "runfile"
+	};
+}
 //#endregion
 //#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
 var require_constants = /* @__PURE__ */ __commonJSMin(((exports, module) => {
@@ -19810,18 +19828,25 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 	const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
 	let version;
 	let route;
-	if (method === "package-manager" || method === "auto") {
-		version = findRocmVersion(inputVersion, debianBased ? await fetchAptVersions(distro.codename) : await fetchElVersions(major));
-		if (version) route = "package-manager";
-		else if (method === "package-manager") throw notFoundError(inputVersion, [pmIndexUrl]);
-	}
 	let runfileVersions;
-	if (!route) {
+	const fetchPmVersions = () => debianBased ? fetchAptVersions(distro.codename) : fetchElVersions(major);
+	if (method === "package-manager") {
+		version = findRocmVersion(inputVersion, await fetchPmVersions());
+		if (!version) throw notFoundError(inputVersion, [pmIndexUrl]);
+		route = "package-manager";
+	} else if (method === "runfile") {
 		runfileVersions = await fetchRunfileVersions();
 		version = findRocmVersion(inputVersion, runfileVersions);
-		if (!version) throw notFoundError(inputVersion, method === "auto" ? [pmIndexUrl, ROCM_RUNFILE_INDEX_URL] : [ROCM_RUNFILE_INDEX_URL]);
+		if (!version) throw notFoundError(inputVersion, [ROCM_RUNFILE_INDEX_URL]);
 		route = "runfile";
+	} else {
+		const [pmVersions, rfVersions] = await Promise.all([fetchPmVersions(), fetchRunfileVersions()]);
+		runfileVersions = rfVersions;
+		const resolved = resolveAutoVersion(inputVersion, pmVersions, rfVersions);
+		if (!resolved) throw notFoundError(inputVersion, [pmIndexUrl, ROCM_RUNFILE_INDEX_URL]);
+		({version, route} = resolved);
 	}
+	info(`Resolved ROCm ${version} via ${route}`);
 	if (route === "package-manager") try {
 		const companion = await resolveCompanionRepo(version, distro);
 		const rocmPath = await installPackageManager(version, distro, companion);

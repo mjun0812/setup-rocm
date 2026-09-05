@@ -7,6 +7,7 @@ import { WINDOWS_HIP_SDK_INSTALLERS } from './const';
  * Supported ROCm installation methods
  */
 export type InstallMethod = 'package-manager' | 'runfile' | 'auto';
+export type InstallRoute = Exclude<InstallMethod, 'auto'>;
 
 /**
  * Parse and validate the `method` input
@@ -396,4 +397,26 @@ export function findWindowsInstaller(input: string): { version: string; url: str
     return undefined;
   }
   return { version, url: WINDOWS_HIP_SDK_INSTALLERS[version] };
+}
+
+/**
+ * Resolve a requested version for `method: auto` against every Linux route at once.
+ * The newest match across the package-manager and runfile listings wins, so `latest`
+ * always means the newest ROCm release regardless of which route ships it. A version
+ * that both routes offer is installed via the package manager.
+ * @param input - Requested version (latest / Major / Major.Minor / Major.Minor.Patch)
+ * @param pmVersions - Versions available from the apt/dnf repository for this distro
+ * @param runfileVersions - Versions available as runfile installers
+ * @returns The resolved version and the route that provides it, or undefined if none matches
+ */
+export function resolveAutoVersion(
+  input: string,
+  pmVersions: string[],
+  runfileVersions: string[]
+): { version: string; route: InstallRoute } | undefined {
+  const version = findRocmVersion(input, [...pmVersions, ...runfileVersions]);
+  if (!version) {
+    return undefined;
+  }
+  return { version, route: pmVersions.includes(version) ? 'package-manager' : 'runfile' };
 }

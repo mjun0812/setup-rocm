@@ -130,7 +130,7 @@ steps:
 
 **Options**:
 
-- `auto` (default): Tries `package-manager` first. If the requested version isn't available there, resolves it again against the `runfile` listing and falls back to `runfile`. If `package-manager` does find the version but the install itself fails, retries the same version via `runfile` without re-resolving it; if that version isn't available via `runfile` either, the original install error is raised
+- `auto` (default): Resolves the requested version against the `package-manager` and `runfile` listings together and picks the newest match, so `latest` is always the newest ROCm release regardless of which route ships it (ROCm 7.14 and 10.x are runfile-only, for example). A version that both routes offer is installed via `package-manager`. If that install fails, the same version is retried via `runfile` without re-resolving it; if it isn't available via `runfile` either, the original install error is raised
 - `package-manager`: Installs ROCm from AMD's official apt (Debian-based) or dnf (RHEL-based) repository
 - `runfile`: Downloads and runs AMD's official runfile installer
 
