@@ -31,6 +31,26 @@ import { installPackageManager, installRunfile, installWindows } from './install
 import { getErrorMessage } from './utils';
 
 /**
+ * Await a version listing, turning a fetch failure into a warning and `undefined`
+ * @param listing - Pending version listing
+ * @param indexUrl - Index the listing comes from (for the warning)
+ * @returns The versions, or undefined when the index could not be fetched
+ */
+async function settleListing(
+  listing: Promise<string[]>,
+  indexUrl: string
+): Promise<string[] | undefined> {
+  try {
+    return await listing;
+  } catch (error) {
+    core.warning(
+      `Could not fetch the ROCm version listing from ${indexUrl}: ${getErrorMessage(error)}`
+    );
+    return undefined;
+  }
+}
+
+/**
  * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux.
  * @param inputVersion - Raw `version` input
  * @param method - Parsed `method` input
@@ -69,11 +89,23 @@ async function resolveAndInstallLinux(
   } else {
     // auto: the newest match across both routes wins, so `latest` is the newest ROCm
     // release even when only the runfile installer ships it.
-    const [pmVersions, rfVersions] = await Promise.all([fetchPmVersions(), fetchRunfileVersions()]);
+    // An index that cannot be fetched is reported and left out; resolveAutoVersion decides
+    // whether the request can still be answered from the remaining listing.
+    const [pmVersions, rfVersions] = await Promise.all([
+      settleListing(fetchPmVersions(), pmIndexUrl),
+      settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL),
+    ]);
     runfileVersions = rfVersions;
-    const resolved = resolveAutoVersion(inputVersion, pmVersions, rfVersions);
+    const resolved = resolveAutoVersion(inputVersion, {
+      packageManager: pmVersions,
+      runfile: rfVersions,
+    });
     if (!resolved) {
-      throw notFoundError(inputVersion, [pmIndexUrl, ROCM_RUNFILE_INDEX_URL]);
+      const sourceUrls = [
+        ...(pmVersions ? [pmIndexUrl] : []),
+        ...(rfVersions ? [ROCM_RUNFILE_INDEX_URL] : []),
+      ];
+      throw notFoundError(inputVersion, sourceUrls);
     }
     ({ version, route } = resolved);
   }

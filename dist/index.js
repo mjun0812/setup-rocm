@@ -17523,6 +17523,14 @@ function error(message, properties = {}) {
 	issueCommand("error", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 /**
+* Adds a warning issue
+* @param message warning issue message. Errors will be converted to string via toString()
+* @param properties optional properties to add to the annotation.
+*/
+function warning(message, properties = {}) {
+	issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+}
+/**
 * Writes info to log with console.log.
 * @param message info message
 */
@@ -17990,23 +17998,38 @@ function findWindowsInstaller(input) {
 		url: WINDOWS_HIP_SDK_INSTALLERS[version]
 	};
 }
+const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 /**
-* Resolve a requested version for `method: auto` against every Linux route at once.
-* The newest match across the package-manager and runfile listings wins, so `latest`
-* always means the newest ROCm release regardless of which route ships it. A version
-* that both routes offer is installed via the package manager.
+* Resolve a requested version for `method: auto`.
+* With both listings the newest match across them wins, so `latest` always means the newest
+* ROCm release regardless of which route ships it. A version that both routes offer is
+* installed via the package manager.
+* When one listing is unavailable, only an exact `Major.Minor.Patch` request can still be
+* answered from the remaining listing; `latest` and partial versions depend on both
+* listings and are refused instead of silently resolving to an older release.
 * @param input - Requested version (latest / Major / Major.Minor / Major.Minor.Patch)
-* @param pmVersions - Versions available from the apt/dnf repository for this distro
-* @param runfileVersions - Versions available as runfile installers
+* @param listings - Versions available per route; undefined when that index could not be fetched
 * @returns The resolved version and the route that provides it, or undefined if none matches
+* @throws Error if the request cannot be decided because a listing is unavailable
 */
-function resolveAutoVersion(input, pmVersions, runfileVersions) {
-	const version = findRocmVersion(input, [...pmVersions, ...runfileVersions]);
-	if (!version) return;
-	return {
+function resolveAutoVersion(input, listings) {
+	const { packageManager, runfile } = listings;
+	if (packageManager && runfile) {
+		const version = findRocmVersion(input, [...packageManager, ...runfile]);
+		if (!version) return;
+		return {
+			version,
+			route: packageManager.includes(version) ? "package-manager" : "runfile"
+		};
+	}
+	if (!packageManager && !runfile) throw new Error("Cannot resolve the ROCm version: no version listing is available");
+	if (!EXACT_VERSION_PATTERN.test(input)) throw new Error(`Cannot resolve ROCm version (${input}) with method auto because the ${packageManager ? "runfile" : "package-manager"} version listing is unavailable. Specify an exact Major.Minor.Patch version, or set method explicitly.`);
+	const route = packageManager ? "package-manager" : "runfile";
+	const version = findRocmVersion(input, packageManager ?? runfile ?? []);
+	return version ? {
 		version,
-		route: pmVersions.includes(version) ? "package-manager" : "runfile"
-	};
+		route
+	} : void 0;
 }
 //#endregion
 //#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
@@ -19816,6 +19839,20 @@ async function installWindows(input) {
 //#endregion
 //#region src/index.ts
 /**
+* Await a version listing, turning a fetch failure into a warning and `undefined`
+* @param listing - Pending version listing
+* @param indexUrl - Index the listing comes from (for the warning)
+* @returns The versions, or undefined when the index could not be fetched
+*/
+async function settleListing(listing, indexUrl) {
+	try {
+		return await listing;
+	} catch (error) {
+		warning(`Could not fetch the ROCm version listing from ${indexUrl}: ${getErrorMessage(error)}`);
+		return;
+	}
+}
+/**
 * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux.
 * @param inputVersion - Raw `version` input
 * @param method - Parsed `method` input
@@ -19840,10 +19877,13 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 		if (!version) throw notFoundError(inputVersion, [ROCM_RUNFILE_INDEX_URL]);
 		route = "runfile";
 	} else {
-		const [pmVersions, rfVersions] = await Promise.all([fetchPmVersions(), fetchRunfileVersions()]);
+		const [pmVersions, rfVersions] = await Promise.all([settleListing(fetchPmVersions(), pmIndexUrl), settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL)]);
 		runfileVersions = rfVersions;
-		const resolved = resolveAutoVersion(inputVersion, pmVersions, rfVersions);
-		if (!resolved) throw notFoundError(inputVersion, [pmIndexUrl, ROCM_RUNFILE_INDEX_URL]);
+		const resolved = resolveAutoVersion(inputVersion, {
+			packageManager: pmVersions,
+			runfile: rfVersions
+		});
+		if (!resolved) throw notFoundError(inputVersion, [...pmVersions ? [pmIndexUrl] : [], ...rfVersions ? [ROCM_RUNFILE_INDEX_URL] : []]);
 		({version, route} = resolved);
 	}
 	info(`Resolved ROCm ${version} via ${route}`);
