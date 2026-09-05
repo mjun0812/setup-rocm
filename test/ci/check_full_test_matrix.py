@@ -42,7 +42,8 @@ REQUIRED_METHODS = ("package-manager", "runfile", "auto")
 REQUIRED_DISPATCH_INPUTS = ("os", "version", "method", "debug")
 RELEASE_TAG_PATTERN = "v[0-9]+.[0-9]+.[0-9]+"
 
-Workflow = dict[str, Any]
+# YAML 1.1 turns the bare `on:` key into the boolean True, so keys are not always str.
+Workflow = dict[Any, Any]
 
 
 def fail(message: str) -> NoReturn:
