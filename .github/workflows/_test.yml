@@ -1,0 +1,198 @@
+name: _Test
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: 'OS to test'
+        required: true
+        type: string
+      version:
+        description: 'ROCm version to test'
+        required: true
+        type: string
+      method:
+        description: 'Method to test'
+        required: true
+        type: string
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        type: boolean
+        default: false
+      expect-failure:
+        description: 'Expect the action step to fail (used to test version resolution failures)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  Test:
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    env:
+      ACTIONS_STEP_DEBUG: ${{ inputs.debug }}
+      ACTIONS_RUNNER_DEBUG: ${{ inputs.debug }}
+
+    steps:
+      - name: Expand Disk Space
+        if: runner.os == 'Linux'
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          echo "-------"
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+          node-version-file: .node-version
+
+      - name: Build
+        run: vp pack
+
+      - name: Test Local Action
+        id: setup-rocm
+        continue-on-error: ${{ inputs.expect-failure }}
+        uses: ./
+        with:
+          version: ${{ inputs.version }}
+          method: ${{ inputs.method }}
+
+      - name: Verify expected failure
+        if: inputs.expect-failure
+        shell: bash
+        run: |
+          echo "outcome=${{ steps.setup-rocm.outcome }}"
+          if [ "${{ steps.setup-rocm.outcome }}" != "failure" ]; then
+            echo "Error: expected the action step to fail, but outcome was '${{ steps.setup-rocm.outcome }}'"
+            exit 1
+          fi
+
+      - name: Verify ROCm Installation (Linux)
+        if: runner.os == 'Linux' && !inputs.expect-failure
+        shell: bash
+        run: |
+          echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
+          echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
+
+          echo "PATH: $PATH"
+
+          # Check if ROCM_PATH is set
+          if [ -z "$ROCM_PATH" ]; then
+            echo "Error: ROCM_PATH is not set"
+            exit 1
+          fi
+          echo "ROCM_PATH=$ROCM_PATH"
+
+          ls "$ROCM_PATH"
+          ls "$ROCM_PATH/bin"
+
+          # Check if hipcc exists
+          if command -v hipcc &> /dev/null; then
+            echo "hipcc found at: $(which hipcc)"
+            hipcc --version
+          else
+            echo "Error: hipcc not found in PATH"
+            exit 1
+          fi
+
+          echo "ROCm installation verified successfully"
+
+      # `select(.name | test("Cross-compile"))` in test/ci/run_full_test.sh looks at every step
+      # declared in this job, including the one skipped for the other OS, so both this step's
+      # name and the Windows one below must only contain "Cross-compile" when they are the one
+      # that actually runs on the current OS (otherwise the skipped step's name can shadow the
+      # real one at index [0]).
+      - name: ${{ runner.os == 'Linux' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Linux-only step, skipped)' }}
+        if: runner.os == 'Linux' && !inputs.expect-failure
+        shell: bash
+        run: |
+          cat <<EOF > "$RUNNER_TEMP/kernel.hip"
+          #include <hip/hip_runtime.h>
+
+          __global__ void add(const float* a, const float* b, float* c, int n) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n) c[i] = a[i] + b[i];
+          }
+          EOF
+
+          hipcc --offload-arch=gfx942 -c "$RUNNER_TEMP/kernel.hip" -o "$RUNNER_TEMP/kernel.o"
+          test -s "$RUNNER_TEMP/kernel.o"
+
+      - name: Verify ROCm Installation (Windows)
+        if: runner.os == 'Windows' && !inputs.expect-failure
+        shell: pwsh
+        run: |
+          echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
+          echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
+          echo "ROCM_PATH=$env:ROCM_PATH"
+
+          $ok = $false
+          try {
+            hipcc --version
+            $ok = ($LASTEXITCODE -eq 0)
+          } catch {
+            $ok = $false
+          }
+
+          if (-not $ok) {
+            try {
+              clang --version
+              $ok = ($LASTEXITCODE -eq 0)
+            } catch {
+              $ok = $false
+            }
+          }
+
+          if (-not $ok) {
+            Write-Error "Error: neither 'hipcc --version' nor 'clang --version' succeeded"
+            exit 1
+          }
+
+          Write-Host "ROCm installation verified successfully"
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows' && !inputs.expect-failure
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          # HIP SDK 7.2's clang headers conflict with MSVC 14.5x's cmath, so pin
+          # toolset 14.44 (bundled on both windows-2022 and windows-2025 images).
+          toolset: '14.44'
+
+      - name: ${{ runner.os == 'Windows' && 'Cross-compile HIP kernel (gfx942)' || 'HIP kernel build (Windows-only step, skipped)' }}
+        if: runner.os == 'Windows' && !inputs.expect-failure
+        shell: pwsh
+        run: |
+          @'
+          #include <hip/hip_runtime.h>
+
+          __global__ void add(const float* a, const float* b, float* c, int n) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n) c[i] = a[i] + b[i];
+          }
+          '@ | Out-File -FilePath "$env:RUNNER_TEMP\kernel.hip" -Encoding ascii
+
+          hipcc --offload-arch=gfx942 -c "$env:RUNNER_TEMP\kernel.hip" -o "$env:RUNNER_TEMP\kernel.o"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Error: hipcc compilation failed"
+            exit 1
+          }
+
+          if (-not (Test-Path "$env:RUNNER_TEMP\kernel.o")) {
+            Write-Error "Error: kernel.o was not generated"
+            exit 1
+          }
+          if ((Get-Item "$env:RUNNER_TEMP\kernel.o").Length -eq 0) {
+            Write-Error "Error: kernel.o is empty"
+            exit 1
+          }

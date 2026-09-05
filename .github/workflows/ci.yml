@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  Format-Lint-TypeCheck:
+    name: Format, Lint and TypeCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+          node-version-file: .node-version
+
+      - name: Check Format, Lint and TypeCheck
+        run: vp check
+
+      - name: Run Unit Tests
+        run: vp test run
+
+  Test:
+    name: Small Test
+    needs: [Format-Lint-TypeCheck]
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          # https://github.com/actions/runner-images
+          - ubuntu-latest
+          - windows-latest
+        method:
+          - auto
+    uses: ./.github/workflows/_test.yml
+    secrets: inherit
+    with:
+      os: ${{ matrix.os }}
+      version: 'latest'
+      method: ${{ matrix.method }}
+      debug: true
+
+  ci-check:
+    name: CI Status Check
+    runs-on: ubuntu-latest
+    needs: [Format-Lint-TypeCheck, Test]
+    if: always()
+    steps:
+      - name: Some CI failed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')}}
+        run: exit 1
+      - name: All CI passed
+        if: ${{ contains(needs.*.result, 'success') }}
+        run: exit 0
