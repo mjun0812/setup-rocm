@@ -36,10 +36,11 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-22.04
-          - ubuntu-24.04
+          # https://github.com/actions/runner-images
+          - ubuntu-latest
+          - windows-latest
         method:
-          - package-manager
+          - auto
     uses: ./.github/workflows/_test.yml
     secrets: inherit
     with:

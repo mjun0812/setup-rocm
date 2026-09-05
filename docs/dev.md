@@ -101,7 +101,7 @@ Jobs:
    - Runs unit tests with `vp test run`
 
 2. **Test**
-   - Tests the action on a small matrix (ubuntu-22.04 / ubuntu-24.04, method `package-manager`) via the reusable `_test.yml` workflow
+   - Tests the action on a small matrix (ubuntu-latest / windows-latest, method `auto`) via the reusable `_test.yml` workflow
    - Tests with the `latest` ROCm version
 
 3. **ci-check**
