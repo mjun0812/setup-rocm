@@ -496,6 +496,22 @@ export function resolveAutoVersion<R extends string>(
         'Specify an exact Major.Minor.Patch version, or set method explicitly.'
     );
   }
+
+  // An exact Major.Minor.Patch request is answered directly from the remaining routes'
+  // own listings (priority order), by numeric equality (runfile's "10.0" and pip's "10.0.0"
+  // are the same version). This keeps it answerable even with a route missing, unlike
+  // `latest`/partial requests below, which need the full union to know the newest match is
+  // not hiding behind the missing listing (the `missing` check above already refuses those).
+  if (EXACT_VERSION_PATTERN.test(input)) {
+    for (const candidate of available) {
+      const listed = candidate.versions.find((version) => compareVersions(version, input) === 0);
+      if (listed !== undefined) {
+        return { version: listed, route: candidate.route };
+      }
+    }
+    return undefined;
+  }
+
   const version = findRocmVersion(
     input,
     available.flatMap((candidate) => candidate.versions)

@@ -18020,6 +18020,16 @@ function resolveAutoVersion(input, routes) {
 	if (available.length === 0) throw new Error("Cannot resolve the ROCm version: no version listing is available");
 	const missing = routes.filter((candidate) => candidate.versions === void 0);
 	if (missing.length > 0 && !EXACT_VERSION_PATTERN.test(input)) throw new Error(`Cannot resolve ROCm version (${input}) with method auto because the ${missing.map((candidate) => candidate.route).join(", ")} version listing is unavailable. Specify an exact Major.Minor.Patch version, or set method explicitly.`);
+	if (EXACT_VERSION_PATTERN.test(input)) {
+		for (const candidate of available) {
+			const listed = candidate.versions.find((version) => compareVersions(version, input) === 0);
+			if (listed !== void 0) return {
+				version: listed,
+				route: candidate.route
+			};
+		}
+		return;
+	}
 	const version = findRocmVersion(input, available.flatMap((candidate) => candidate.versions));
 	if (!version) return;
 	const matchedRoute = available.find((candidate) => candidate.versions.some((listed) => compareVersions(listed, version) === 0));
