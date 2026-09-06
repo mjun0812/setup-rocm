@@ -25,9 +25,12 @@ export const WINDOWS_HIP_SDK_INSTALLERS: Record<string, string> = {
 export const ROCM_META_PACKAGE = 'rocm-hip-sdk';
 
 /**
- * Base URL for the AMD ROCm pip index (TheRock-based wheel distribution)
+ * Base URL for the AMD ROCm pip index (TheRock-based wheel distribution).
+ * `/rocm/whl-next/` 301-redirects here with a relative `Location` header, which
+ * `@actions/http-client` cannot follow (it requires an absolute URL), so this
+ * canonical path must be used directly.
  */
-export const ROCM_PIP_INDEX_URL = 'https://stable.repo.amd.com/rocm/whl-next/';
+export const ROCM_PIP_INDEX_URL = 'https://stable.repo.amd.com/rocm/core/whl-next/';
 
 /**
  * Directory name (under `RUNNER_TEMP`) of the action-local venv the pip route installs into
