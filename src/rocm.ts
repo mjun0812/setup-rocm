@@ -145,14 +145,21 @@ export async function fetchAptVersions(codename: string): Promise<string[]> {
 }
 
 /**
- * Fetch available ROCm versions from the el<major> (RHEL-based) repository
+ * Fetch available ROCm versions from the el<major> (RHEL-based) repository.
+ * AMD only publishes a repository for some majors (el8, el9, el10); a definite 404 for any
+ * other major (Amazon Linux 2023, Fedora, el7) means "no versions" rather than a fetch failure,
+ * so it must not make `auto` treat the package-manager listing as unavailable.
  * @param major - RHEL major version (e.g., "9")
- * @returns Promise that resolves to numeric version strings, sorted ascending
+ * @returns Promise that resolves to numeric version strings, sorted ascending (empty when AMD
+ *   publishes no repository for the major)
  */
 export async function fetchElVersions(major: string): Promise<string[]> {
   const url = ROCM_EL_INDEX_URL(major);
   const client = new HttpClient('setup-rocm');
   const response = await client.get(url);
+  if (response.message.statusCode === 404) {
+    return [];
+  }
   if (response.message.statusCode !== 200) {
     throw new Error(
       `Failed to fetch ROCm el${major} index from ${url}: ${response.message.statusCode} ${response.message.statusMessage}`
