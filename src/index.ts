@@ -25,10 +25,11 @@ import {
   ROCM_APT_INDEX_URL,
   ROCM_EL_INDEX_URL,
   ROCM_RUNFILE_INDEX_URL,
+  ROCM_PIP_CORE_INDEX_URL,
   resolveAutoVersion,
 } from './rocm';
 import type { InstallRoute } from './rocm';
-import { ROCM_PIP_INDEX_URL, WINDOWS_HIP_SDK_INSTALLERS } from './const';
+import { WINDOWS_HIP_SDK_INSTALLERS } from './const';
 import { installPackageManager, installRunfile, installWindows, installPip } from './install';
 import { getErrorMessage } from './utils';
 
@@ -68,7 +69,6 @@ async function resolveAndInstallLinux(
   const debianBased = isDebianBased(distro);
   const major = distro.version.split('.')[0];
   const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
-  const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
 
   let version: string | undefined;
   let route: InstallRoute | undefined;
@@ -93,7 +93,7 @@ async function resolveAndInstallLinux(
   } else if (method === 'pip') {
     version = findRocmVersion(inputVersion, await fetchPipVersions('linux_x86_64'));
     if (!version) {
-      throw notFoundError(inputVersion, [pipIndexUrl]);
+      throw notFoundError(inputVersion, [ROCM_PIP_CORE_INDEX_URL]);
     }
     route = 'pip';
   } else {
@@ -104,7 +104,7 @@ async function resolveAndInstallLinux(
     const [pmVersions, rfVersions, pipVersions] = await Promise.all([
       settleListing(fetchPmVersions(), pmIndexUrl),
       settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL),
-      settleListing(fetchPipVersions('linux_x86_64'), pipIndexUrl),
+      settleListing(fetchPipVersions('linux_x86_64'), ROCM_PIP_CORE_INDEX_URL),
     ]);
     runfileVersions = rfVersions;
     const resolved = resolveAutoVersion(inputVersion, [
@@ -116,7 +116,7 @@ async function resolveAndInstallLinux(
       const sourceUrls = [
         ...(pmVersions ? [pmIndexUrl] : []),
         ...(rfVersions ? [ROCM_RUNFILE_INDEX_URL] : []),
-        ...(pipVersions ? [pipIndexUrl] : []),
+        ...(pipVersions ? [ROCM_PIP_CORE_INDEX_URL] : []),
       ];
       throw notFoundError(inputVersion, sourceUrls);
     }
@@ -167,12 +167,10 @@ async function resolveAndInstallWindows(
   inputVersion: string,
   method: InstallMethod
 ): Promise<{ version: string; rocmPath: string; binPath?: string; isPipRoute: boolean }> {
-  const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
-
   if (method === 'pip') {
     const version = findRocmVersion(inputVersion, await fetchPipVersions('win_amd64'));
     if (!version) {
-      throw notFoundError(inputVersion, [pipIndexUrl]);
+      throw notFoundError(inputVersion, [ROCM_PIP_CORE_INDEX_URL]);
     }
     core.info(`Resolved ROCm ${version} via pip`);
     const { rocmPath, binPath } = await installPip(version, OS.WINDOWS);
@@ -187,13 +185,16 @@ async function resolveAndInstallWindows(
   // is the newest ROCm release even when only pip ships it. The installer table is
   // built-in and never missing; only the pip listing can fail to fetch.
   const installerVersions = Object.keys(WINDOWS_HIP_SDK_INSTALLERS);
-  const pipVersions = await settleListing(fetchPipVersions('win_amd64'), pipIndexUrl);
+  const pipVersions = await settleListing(fetchPipVersions('win_amd64'), ROCM_PIP_CORE_INDEX_URL);
   const resolved = resolveAutoVersion(inputVersion, [
     { route: 'installer', versions: installerVersions },
     { route: 'pip', versions: pipVersions },
   ]);
   if (!resolved) {
-    const sourceUrls = [installerVersions.join(', '), ...(pipVersions ? [pipIndexUrl] : [])];
+    const sourceUrls = [
+      installerVersions.join(', '),
+      ...(pipVersions ? [ROCM_PIP_CORE_INDEX_URL] : []),
+    ];
     throw notFoundError(inputVersion, sourceUrls);
   }
   const { version, route } = resolved;

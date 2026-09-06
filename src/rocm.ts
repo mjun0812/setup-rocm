@@ -195,6 +195,12 @@ const PIP_WHEEL_PATTERN = /rocm_sdk_core-(.+?)-py3-none-(\w+)\.whl/;
 const PIP_EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
+ * Base URL for the AMD ROCm pip index's `rocm-sdk-core` simple index (used to fetch the
+ * version listing; `rocm[devel]==<version>` itself is installed from `ROCM_PIP_INDEX_URL`)
+ */
+export const ROCM_PIP_CORE_INDEX_URL = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
+
+/**
  * Parse a PEP 503 simple index HTML page (as served for `rocm-sdk-core`) into the
  * Major.Minor.Patch versions that publish a wheel for the given platform tag
  * @param html - The simple index HTML (anchors named after the wheel filename)
@@ -217,12 +223,11 @@ export function parsePipIndex(html: string, platformTag: string): string[] {
  * @returns Promise that resolves to numeric version strings, sorted ascending
  */
 export async function fetchPipVersions(platformTag: string): Promise<string[]> {
-  const url = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
   const client = new HttpClient('setup-rocm');
-  const response = await client.get(url);
+  const response = await client.get(ROCM_PIP_CORE_INDEX_URL);
   if (response.message.statusCode !== 200) {
     throw new Error(
-      `Failed to fetch ROCm pip index from ${url}: ${response.message.statusCode} ${response.message.statusMessage}`
+      `Failed to fetch ROCm pip index from ${ROCM_PIP_CORE_INDEX_URL}: ${response.message.statusCode} ${response.message.statusMessage}`
     );
   }
   const html = await response.readBody();

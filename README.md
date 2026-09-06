@@ -12,7 +12,7 @@ Set up a specific version of AMD ROCm in GitHub Actions.
 
 - 🚀 **Dynamic Version Selection**: Install any ROCm version without waiting for action updates
 - 🎯 **Flexible Version Specification**: Support for `latest`, `Major`, `Major.Minor`, or `Major.Minor.Patch` formats
-- ⚡️ **Automatic Installation Method Selection**: Intelligently chooses between the package-manager and runfile installers on Linux
+- ⚡️ **Automatic Installation Method Selection**: Intelligently chooses the newest ROCm release across package-manager, runfile, and pip on Linux, and across the HIP SDK installer and pip on Windows
 - 💻 **Cross-Platform Support**: Works on both Linux (x86_64) and Windows (x86_64) runners
 - 🥗 **Supports Both Debian-based and RHEL-based Distributions**: Works on Ubuntu and RHEL-based container/VM environments (AlmaLinux, etc.)
 - 🛠️ **Environment Configuration**: Automatically sets up all necessary environment variables
