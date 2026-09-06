@@ -85,8 +85,10 @@ system package manager or installer. `rocm[devel]==<version>` — which pulls in
 `rocm-sdk-devel` — is installed into an action-local Python virtual environment at
 `${RUNNER_TEMP}/setup-rocm-venv` (not the runner's system Python), followed by `rocm-sdk init` to
 materialize the devel component. The venv is not deleted afterwards. `rocm-path` is the venv's
-`rocm-sdk path --root`, and `PATH` is prepended with `rocm-sdk path --bin` instead of
-`<rocm-path>/bin`; on Windows this is the venv's `Scripts\` directory and `hipcc.exe`.
+`rocm-sdk path --root`, and `PATH` is prepended with `rocm-sdk path --bin`, which is
+`<rocm-path>/bin` (the same layout as the other routes; on Windows it holds `hipcc.exe`).
+The venv's own `bin/` (`Scripts\` on Windows) is not added to `PATH`, so the `python` and
+`pip` of later steps are unaffected.
 `HIP_DEVICE_LIB_PATH` is also set to `<rocm-path>/lib/llvm/amdgcn/bitcode`, since clang only looks
 for the device library directly under `<rocm-path>/amdgcn/bitcode` and TheRock's tree keeps it under
 `lib/llvm/amdgcn/bitcode` instead. This route requires a `python3` (Windows: `python`) on `PATH` — add
@@ -218,7 +220,7 @@ This action automatically configures the following environment variables for sub
 - `ROCM_PATH`: Path to the ROCm installation directory
 - `ROCM_HOME`: Alias for `ROCM_PATH` (used by PyTorch's ROCm detection)
 - `HIP_PATH`: Alias for `ROCM_PATH` (used by hipcc and CMake's HIP detection; required on Windows)
-- `PATH`: Prepends `${ROCM_PATH}/bin` for access to ROCm binaries (hipcc, etc.); for `pip`, prepends the venv's `rocm-sdk path --bin` instead
+- `PATH`: Prepends `${ROCM_PATH}/bin` for access to ROCm binaries (hipcc, etc.). For `pip`, this directory is obtained from `rocm-sdk path --bin`, which resolves to the same `${ROCM_PATH}/bin`; the venv's `bin/` (`Scripts\`) is not added
 - `HIP_DEVICE_LIB_PATH`: For `pip` only, set to `${ROCM_PATH}/lib/llvm/amdgcn/bitcode`, since clang only looks for the device library directly under `${ROCM_PATH}/amdgcn/bitcode`, which is not where TheRock's tree puts it
 
 ### Linux-specific
