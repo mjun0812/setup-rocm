@@ -21,7 +21,7 @@ inputs:
       The package-manager method installs ROCm from AMD's official apt/dnf repository.
       The runfile method downloads and runs AMD's official runfile installer.
       The pip method installs ROCm from AMD's pip index into an action-local Python virtual environment.
-      This input is only used on Linux and is ignored on Windows.
+      On Windows, only the pip method is honored explicitly; package-manager and runfile are ignored and treated as auto (an info log notes that it was ignored).
     default: auto
 
 outputs:
