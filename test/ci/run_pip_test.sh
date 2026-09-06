@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # T-004 (Linux pip route installs ROCm into an action-local venv and lets a
-# later step cross-compile with hipcc) Acceptance Criteria, verified against a
-# real GitHub-hosted runner by calling the `dispatch` / `wait` / `cross-compile`
+# later step cross-compile with hipcc) and T-005 AC-1 (same, on the Windows
+# pip route with hipcc.exe) Acceptance Criteria, verified against a real
+# GitHub-hosted runner by calling the `dispatch` / `wait` / `cross-compile`
 # subcommands of test/ci/run_full_test.sh (the T-004 harness for the
 # package-manager route). run_full_test.sh itself is not modified.
 #
@@ -26,13 +27,20 @@
 #   - _test.yml's Linux verification step echoes the action's outputs and
 #     environment as `outputs.version=<value>` / `outputs.rocm-path=<value>` /
 #     `ROCM_PATH=<value>` / `RUNNER_TEMP=<value>`, one per line, and runs
-#     `hipcc --version` (its "HIP version" output is grepped for).
+#     `hipcc --version` (its "HIP version" output is grepped for). The
+#     Windows verification step echoes the same four values (RUNNER_TEMP is a
+#     backslash-separated path, e.g. `D:\a\_temp`) and falls back to
+#     `clang --version` ("clang version") when `hipcc --version` fails, so the
+#     prefix check accepts either `/` or `\` right after the RUNNER_TEMP value
+#     and the version-output grep accepts either "HIP version" or
+#     "clang version".
 #   - A step whose name contains "Cross-compile" runs
 #     `hipcc --offload-arch=gfx942 -c` on a minimal HIP source.
 #
 # Usage:
 #   test/ci/run_pip_test.sh ac1   # AC-1: ubuntu-22.04, method=pip, version=latest
-#   test/ci/run_pip_test.sh all   # every AC assigned to this harness (currently: ac1)
+#   test/ci/run_pip_test.sh ac2   # AC-2 (T-005 AC-1): windows-2022, method=pip, version=latest
+#   test/ci/run_pip_test.sh all   # every AC assigned to this harness (currently: ac1, ac2)
 #
 # Dependencies: git, gh (authenticated with the workflow scope). Shares the
 # same assumptions as run_full_test.sh. Written to run under macOS's bash 3.2
@@ -131,16 +139,18 @@ get_or_dispatch_and_wait() {
 	dispatch_and_wait "${os}" "${version}" "${method}"
 }
 
-# AC-1: verifies outputs.version / outputs.rocm-path / ROCM_PATH / hipcc for
-# the pip route. Unlike run_full_test.sh's `verify` (exact match on
+# AC-1 / AC-2: verifies outputs.version / outputs.rocm-path / ROCM_PATH /
+# hipcc for the pip route. Unlike run_full_test.sh's `verify` (exact match on
 # rocm-path), rocm-path here is only known to be a subdirectory of
 # <RUNNER_TEMP>/setup-rocm-venv, so it is checked as a prefix against the
-# RUNNER_TEMP value the _test.yml verification step echoes.
-# hipcc_name is only used in failure messages (e.g. "hipcc" / "hipcc.exe"), so
-# this same function can be reused for the Windows pip route by a later task.
+# RUNNER_TEMP value the _test.yml verification step echoes. The separator
+# right after the RUNNER_TEMP value is checked as either `/` (Linux) or `\`
+# (Windows), so this function works for both.
+# hipcc_name is only used in failure messages (e.g. "hipcc" / "hipcc.exe").
 verify_pip_outputs() {
 	local os="$1" version="$2" method="$3" hipcc_name="$4"
-	local id log_file out_version out_rocm_path env_rocm_path runner_temp expected_prefix
+	local id log_file out_version out_rocm_path env_rocm_path runner_temp
+	local expected_prefix_slash expected_prefix_backslash
 
 	id="$(get_or_dispatch_and_wait "${os}" "${version}" "${method}")"
 	log_file="$(fetch_log "${id}")"
@@ -155,17 +165,18 @@ verify_pip_outputs() {
 
 	[ -n "${runner_temp}" ] || fail "run ${id} (os=${os}): RUNNER_TEMP= not found in log (the _test.yml verification step must echo it)"
 
-	expected_prefix="${runner_temp}/setup-rocm-venv/"
+	expected_prefix_slash="${runner_temp}/setup-rocm-venv/"
+	expected_prefix_backslash="${runner_temp}\\setup-rocm-venv\\"
 	case "${out_rocm_path}" in
-	"${expected_prefix}"*) ;;
-	*) fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' does not start with '${expected_prefix}'" ;;
+	"${expected_prefix_slash}"* | "${expected_prefix_backslash}"*) ;;
+	*) fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' does not start with '${expected_prefix_slash}' or '${expected_prefix_backslash}'" ;;
 	esac
 	case "${env_rocm_path}" in
-	"${expected_prefix}"*) ;;
-	*) fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' does not start with '${expected_prefix}'" ;;
+	"${expected_prefix_slash}"* | "${expected_prefix_backslash}"*) ;;
+	*) fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' does not start with '${expected_prefix_slash}' or '${expected_prefix_backslash}'" ;;
 	esac
 
-	grep -qE 'HIP version' "${log_file}" || fail "run ${id} (os=${os}): ${hipcc_name} --version output ('HIP version') not found in log"
+	grep -qE 'HIP version|clang version' "${log_file}" || fail "run ${id} (os=${os}): neither 'HIP version' (${hipcc_name} --version) nor 'clang version' (clang --version fallback) output found in log"
 
 	log "OK for os=${os}: version=${out_version} rocm-path=${out_rocm_path}"
 }
@@ -175,8 +186,14 @@ cmd_ac1() {
 	"${RUN_FULL_TEST}" cross-compile ubuntu-22.04 latest pip
 }
 
+cmd_ac2() {
+	verify_pip_outputs windows-2022 latest pip hipcc.exe
+	"${RUN_FULL_TEST}" cross-compile windows-2022 latest pip
+}
+
 cmd_all() {
 	cmd_ac1
+	cmd_ac2
 }
 
 main() {
@@ -185,11 +202,14 @@ main() {
 	ac1)
 		cmd_ac1
 		;;
+	ac2)
+		cmd_ac2
+		;;
 	all)
 		cmd_all
 		;;
 	*)
-		echo "usage: $0 {ac1|all}" >&2
+		echo "usage: $0 {ac1|ac2|all}" >&2
 		exit 2
 		;;
 	esac

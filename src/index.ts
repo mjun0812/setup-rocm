@@ -28,7 +28,7 @@ import {
   resolveAutoVersion,
 } from './rocm';
 import type { InstallRoute } from './rocm';
-import { ROCM_PIP_INDEX_URL } from './const';
+import { ROCM_PIP_INDEX_URL, WINDOWS_HIP_SDK_INSTALLERS } from './const';
 import { installPackageManager, installRunfile, installWindows, installPip } from './install';
 import { getErrorMessage } from './utils';
 
@@ -155,6 +155,60 @@ async function resolveAndInstallLinux(
 }
 
 /**
+ * Resolve the ROCm version and route (installer/pip), then install ROCm on Windows.
+ * `method: pip` is honored explicitly; `package-manager` and `runfile` are ignored (as
+ * before Windows had a second route) and treated as `auto`.
+ * @param inputVersion - Raw `version` input
+ * @param method - Parsed `method` input
+ * @returns The resolved version, the path to the ROCm installation, and (pip route only) its
+ * bin directory
+ */
+async function resolveAndInstallWindows(
+  inputVersion: string,
+  method: InstallMethod
+): Promise<{ version: string; rocmPath: string; binPath?: string }> {
+  const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
+
+  if (method === 'pip') {
+    const version = findRocmVersion(inputVersion, await fetchPipVersions('win_amd64'));
+    if (!version) {
+      throw notFoundError(inputVersion, [pipIndexUrl]);
+    }
+    core.info(`Resolved ROCm ${version} via pip`);
+    const { rocmPath, binPath } = await installPip(version, OS.WINDOWS);
+    return { version, rocmPath, binPath };
+  }
+
+  if (method !== 'auto') {
+    core.info('The method input is ignored on Windows (installer and pip only)');
+  }
+
+  // auto: the newest match across the installer table and the pip index wins, so `latest`
+  // is the newest ROCm release even when only pip ships it. The installer table is
+  // built-in and never missing; only the pip listing can fail to fetch.
+  const installerVersions = Object.keys(WINDOWS_HIP_SDK_INSTALLERS);
+  const pipVersions = await settleListing(fetchPipVersions('win_amd64'), pipIndexUrl);
+  const resolved = resolveAutoVersion(inputVersion, [
+    { route: 'installer', versions: installerVersions },
+    { route: 'pip', versions: pipVersions },
+  ]);
+  if (!resolved) {
+    const sourceUrls = [installerVersions.join(', '), ...(pipVersions ? [pipIndexUrl] : [])];
+    throw notFoundError(inputVersion, sourceUrls);
+  }
+  const { version, route } = resolved;
+  core.info(`Resolved ROCm ${version} via ${route}`);
+
+  if (route === 'pip') {
+    const { rocmPath, binPath } = await installPip(version, OS.WINDOWS);
+    return { version, rocmPath, binPath };
+  }
+
+  const result = await installWindows(version);
+  return { version: result.version, rocmPath: result.rocmPath };
+}
+
+/**
  * Export ROCm environment variables and add its bin directory to PATH
  * @param osType - Operating system type
  * @param rocmPath - Path to the ROCm installation
@@ -218,13 +272,10 @@ async function run(): Promise<void> {
         `Windows version: ${windowsVersion.name} (${windowsVersion.release}, build ${windowsVersion.build})`
       );
 
-      if (method !== 'auto') {
-        core.info('The method input is ignored on Windows (HIP SDK installer only)');
-      }
-
-      const result = await installWindows(inputVersion);
+      const result = await resolveAndInstallWindows(inputVersion, method);
       version = result.version;
       rocmPath = result.rocmPath;
+      binPath = result.binPath;
     }
 
     // Set environment variables

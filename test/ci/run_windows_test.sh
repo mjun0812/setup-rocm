@@ -26,9 +26,16 @@
 #     実行する。
 #   - `Cross-compile` を名前に含む step で `hipcc --offload-arch=gfx942 -c` を実行する。
 #
+# T-005 (pip-wheel-route spec) AC-2/AC-3: Windows の `auto` は installer と pip の
+# 一覧の和集合から最新を選ぶようになり、windows-2022 の `latest auto` は installer の
+# 7.2.0 ではなく pip の 10.0.0 になる。この版の rocm-path は venv 配下 (完全一致ではなく
+# <RUNNER_TEMP>\setup-rocm-venv\ で始まるかの prefix 判定) になるため、
+# verify_windows_outputs の第5引数に `venv` を渡すとその判定に切り替わる。
+# T-005 の AC に windows-2025 の `latest auto` は含まれないため cmd_ac1 から外した。
+#
 # 使い方:
-#   test/ci/run_windows_test.sh ac1   # AC-1: windows-2022 / windows-2025, version=latest
-#   test/ci/run_windows_test.sh ac2   # AC-2: windows-2022, version=6.4
+#   test/ci/run_windows_test.sh ac1   # AC-1 (T-005 AC-2): windows-2022, method=auto, version=latest
+#   test/ci/run_windows_test.sh ac2   # AC-2 (T-005 AC-3): windows-2022, method=auto, version=6.4
 #   test/ci/run_windows_test.sh ac3   # AC-3: AC-1 の windows-2022 run のクロスコンパイル検証
 #
 # 依存: git, gh (workflow scope で認証済み)。run_full_test.sh と同じ前提を共有する。
@@ -128,9 +135,13 @@ get_or_dispatch_and_wait() {
 
 # AC-1 / AC-2: outputs (version / rocm-path) / 環境変数 (ROCM_PATH) /
 # hipcc --version (無ければ clang --version) を検証する。
+# expected_rocm_path に `venv` を渡すと、完全一致ではなく
+# <RUNNER_TEMP>\setup-rocm-venv\ で始まるかの prefix 判定になる (pip 経路の
+# rocm-path は `rocm-sdk path --root` の実行時解決値のため、他経路のように
+# 固定パスと完全一致しない)。
 verify_windows_outputs() {
 	local os="$1" version="$2" method="$3" version_regex="$4" expected_rocm_path="$5"
-	local id log_file out_version out_rocm_path env_rocm_path
+	local id log_file out_version out_rocm_path env_rocm_path runner_temp expected_prefix
 
 	id="$(get_or_dispatch_and_wait "${os}" "${version}" "${method}")"
 	log_file="$(fetch_log "${id}")"
@@ -142,8 +153,22 @@ verify_windows_outputs() {
 	[ -n "${out_version}" ] || fail "run ${id} (os=${os}): outputs.version not found in log"
 	echo "${out_version}" | grep -qE "${version_regex}" || fail "run ${id} (os=${os}): outputs.version='${out_version}' does not match ${version_regex}"
 
-	[ "${out_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' != '${expected_rocm_path}'"
-	[ "${env_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' != '${expected_rocm_path}'"
+	if [ "${expected_rocm_path}" = "venv" ]; then
+		runner_temp="$(grep -oE 'RUNNER_TEMP=.*' "${log_file}" | tail -n1 | sed -E 's/^RUNNER_TEMP=//' | tr -d '\r')"
+		[ -n "${runner_temp}" ] || fail "run ${id} (os=${os}): RUNNER_TEMP= not found in log (the _test.yml verification step must echo it)"
+		expected_prefix="${runner_temp}\\setup-rocm-venv\\"
+		case "${out_rocm_path}" in
+		"${expected_prefix}"*) ;;
+		*) fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' does not start with '${expected_prefix}'" ;;
+		esac
+		case "${env_rocm_path}" in
+		"${expected_prefix}"*) ;;
+		*) fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' does not start with '${expected_prefix}'" ;;
+		esac
+	else
+		[ "${out_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): outputs.rocm-path='${out_rocm_path}' != '${expected_rocm_path}'"
+		[ "${env_rocm_path}" = "${expected_rocm_path}" ] || fail "run ${id} (os=${os}): ROCM_PATH='${env_rocm_path}' != '${expected_rocm_path}'"
+	fi
 
 	grep -qE 'HIP version|clang version' "${log_file}" || fail "run ${id} (os=${os}): neither 'HIP version' (hipcc --version) nor 'clang version' (clang --version) output found in log"
 
@@ -151,8 +176,7 @@ verify_windows_outputs() {
 }
 
 cmd_ac1() {
-	verify_windows_outputs windows-2022 latest auto '^7\.2\.0$' 'C:\Program Files\AMD\ROCm\7.2'
-	verify_windows_outputs windows-2025 latest auto '^7\.2\.0$' 'C:\Program Files\AMD\ROCm\7.2'
+	verify_windows_outputs windows-2022 latest auto '^10\.0\.0$' venv
 }
 
 cmd_ac2() {
