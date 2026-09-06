@@ -20013,6 +20013,7 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 	const debianBased = isDebianBased(distro);
 	const major = distro.version.split(".")[0];
 	const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
+	const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
 	let version;
 	let route;
 	let runfileVersions;
@@ -20027,21 +20028,35 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 		if (!version) throw notFoundError(inputVersion, [ROCM_RUNFILE_INDEX_URL]);
 		route = "runfile";
 	} else if (method === "pip") {
-		const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
 		version = findRocmVersion(inputVersion, await fetchPipVersions("linux_x86_64"));
 		if (!version) throw notFoundError(inputVersion, [pipIndexUrl]);
 		route = "pip";
 	} else {
-		const [pmVersions, rfVersions] = await Promise.all([settleListing(fetchPmVersions(), pmIndexUrl), settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL)]);
+		const [pmVersions, rfVersions, pipVersions] = await Promise.all([
+			settleListing(fetchPmVersions(), pmIndexUrl),
+			settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL),
+			settleListing(fetchPipVersions("linux_x86_64"), pipIndexUrl)
+		]);
 		runfileVersions = rfVersions;
-		const resolved = resolveAutoVersion(inputVersion, [{
-			route: "package-manager",
-			versions: pmVersions
-		}, {
-			route: "runfile",
-			versions: rfVersions
-		}]);
-		if (!resolved) throw notFoundError(inputVersion, [...pmVersions ? [pmIndexUrl] : [], ...rfVersions ? [ROCM_RUNFILE_INDEX_URL] : []]);
+		const resolved = resolveAutoVersion(inputVersion, [
+			{
+				route: "package-manager",
+				versions: pmVersions
+			},
+			{
+				route: "runfile",
+				versions: rfVersions
+			},
+			{
+				route: "pip",
+				versions: pipVersions
+			}
+		]);
+		if (!resolved) throw notFoundError(inputVersion, [
+			...pmVersions ? [pmIndexUrl] : [],
+			...rfVersions ? [ROCM_RUNFILE_INDEX_URL] : [],
+			...pipVersions ? [pipIndexUrl] : []
+		]);
 		({version, route} = resolved);
 	}
 	info(`Resolved ROCm ${version} via ${route}`);
