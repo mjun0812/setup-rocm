@@ -1,48 +1,54 @@
 #!/usr/bin/env bash
 #
-# T-007 (Windows HIP SDK installer経路の導入とCI検証 (統合)) の
-# Acceptance Criteria を、test/ci/run_full_test.sh (T-004の検査ハーネス) の
-# `dispatch` / `wait` / `cross-compile` サブコマンドを呼び出して検証する
-# minimal-harness。run_full_test.sh 自体は変更しない。
+# Verifies the Windows HIP SDK installer route by calling
+# test/ci/run_full_test.sh's `dispatch` / `wait` / `cross-compile`
+# subcommands. run_full_test.sh itself is not modified.
 #
-# run_full_test.sh の `verify` は Linux 向けの `hipcc --version|HIP version` 判定を
-# 前提にしており、Windows で `clang --version` にフォールバックした場合に
-# 満たせるか不明なため、outputs / 環境変数 / hipcc・clang の検証はこのラッパー側で
-# 独自に行う (dispatch した run のログを自分で取得して grep する)。
-# クロスコンパイル (AC-3) の検証は OS に依存しないため run_full_test.sh の
-# `cross-compile` をそのまま使う。
+# run_full_test.sh's `verify` assumes a Linux-style
+# `hipcc --version|HIP version` check, which may not hold on Windows
+# when it falls back to `clang --version`; so this wrapper performs its
+# own verification of outputs / environment variables / hipcc-or-clang
+# (fetching the dispatched run's log and grepping it itself). The
+# cross-compile check is OS-independent, so run_full_test.sh's
+# `cross-compile` is reused as-is.
 #
-# run id のキャッシュファイル命名 (STATE_DIR/run-<os>-<version>-<method>.id) は
-# run_full_test.sh と同じ規則にしているため、このスクリプトの dispatch と
-# run_full_test.sh cross-compile が同じ run を共有できる (AC-3 は AC-1 の
-# windows-2022 run を再利用する)。
+# The run id cache file naming (STATE_DIR/run-<os>-<version>-<method>.id)
+# follows the same convention as run_full_test.sh, so this script's
+# dispatch and run_full_test.sh's cross-compile can share the same run.
 #
-# 前提 (契約。実装側と共有):
-#   - .github/workflows/full-test.yml (main に登録済み) の workflow_dispatch に
-#     os / version / method を渡して Windows job を起動できる。
-#   - _test.yml の Windows 向け検証 step が、action の outputs / 環境変数を
-#     `outputs.version=<値>` / `outputs.rocm-path=<値>` / `ROCM_PATH=<値>` の形で
-#     PowerShell で1行ずつ echo し、`hipcc --version` (無ければ `clang --version`) を
-#     実行する。
-#   - `Cross-compile` を名前に含む step で `hipcc --offload-arch=gfx942 -c` を実行する。
+# Contract shared with the implementation:
+#   - .github/workflows/full-test.yml (registered on main)'s
+#     workflow_dispatch can start a Windows job with os / version /
+#     method.
+#   - _test.yml's Windows verification step echoes the action's outputs
+#     and environment as `outputs.version=<value>` /
+#     `outputs.rocm-path=<value>` / `ROCM_PATH=<value>` in PowerShell,
+#     one per line, and runs `hipcc --version` (falling back to
+#     `clang --version` if unavailable).
+#   - A step whose name contains "Cross-compile" runs
+#     `hipcc --offload-arch=gfx942 -c`.
 #
-# T-005 (pip-wheel-route spec) AC-2/AC-3: Windows の `auto` は installer と pip の
-# 一覧の和集合から最新を選ぶようになり、windows-2022 の `latest auto` は installer の
-# 7.2.0 ではなく pip の 10.0.0 になる。この版の rocm-path は venv 配下 (完全一致ではなく
-# <RUNNER_TEMP>\setup-rocm-venv\ で始まるかの prefix 判定) になるため、
-# verify_windows_outputs の第5引数に `venv` を渡すとその判定に切り替わる。
-# T-005 の AC に windows-2025 の `latest auto` は含まれないため cmd_ac1 から外した。
+# On the pip-wheel route, Windows's `auto` picks the latest version
+# from the union of the installer and pip lists, so windows-2022's
+# `latest auto` resolves to pip's 10.0.0 rather than the installer's
+# 7.2.0. That version's rocm-path lives under a venv (checked as a
+# prefix match against `<RUNNER_TEMP>\setup-rocm-venv\` rather than an
+# exact match); passing `venv` as verify_windows_outputs's 5th argument
+# switches to that check. windows-2025's `latest auto` is intentionally
+# not covered by cmd_ac1.
 #
-# 使い方:
-#   test/ci/run_windows_test.sh ac1   # AC-1 (T-005 AC-2): windows-2022, method=auto, version=latest
-#   test/ci/run_windows_test.sh ac2   # AC-2 (T-005 AC-3): windows-2022, method=auto, version=6.4
-#   test/ci/run_windows_test.sh ac3   # AC-3: AC-1 の windows-2022 run のクロスコンパイル検証
+# Usage:
+#   test/ci/run_windows_test.sh ac1   # windows-2022, method=auto, version=latest
+#   test/ci/run_windows_test.sh ac2   # windows-2022, method=auto, version=6.4
+#   test/ci/run_windows_test.sh ac3   # verifies the cross-compile on ac1's windows-2022 run
 #
-# 依存: git, gh (workflow scope で認証済み)。run_full_test.sh と同じ前提を共有する。
-# macOS の bash 3.2 でも動く構文 (連想配列を使わない) にしている。
+# Dependencies: git, gh (authenticated with the workflow scope). Shares
+# the same assumptions as run_full_test.sh. Written to run under
+# macOS's bash 3.2 too (no associative arrays).
 #
-# 実行対象の branch (feat/setup-rocm) は既に origin へ push 済みの前提。
-# ここでは push を行わない (worktreeへのcommit/pushはverifierの責務外)。
+# The branch under test (feat/setup-rocm) is assumed to already be
+# pushed to origin; this script does not push (pushing is outside a
+# verifier's responsibility).
 
 set -euo pipefail
 
@@ -51,7 +57,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RUN_FULL_TEST="${SCRIPT_DIR}/run_full_test.sh"
 STATE_DIR="${STATE_DIR:-${SCRIPT_DIR}/.state}"
 
-# run id (databaseId) の形式。gh run list --json databaseId は常に数値。
+# Format of a run id (databaseId). gh run list --json databaseId is always numeric.
 RUN_ID_RE='^[0-9]+$'
 
 log() {
@@ -65,8 +71,9 @@ fail() {
 
 mkdir -p "${STATE_DIR}"
 
-# run_full_test.sh の run_id_file と同じ命名規則。同じキャッシュファイルを共有することで
-# このスクリプトの dispatch と run_full_test.sh の cross-compile が同じ run を指せる。
+# Same naming convention as run_full_test.sh's run_id_file, so this
+# script's dispatch and run_full_test.sh's cross-compile can point at
+# the same run.
 run_id_file() {
 	local os="$1" version="$2" method="$3" key
 	key="$(printf '%s-%s-%s' "${os}" "${version}" "${method}" | tr '/: ' '___')"
@@ -83,7 +90,8 @@ fetch_log() {
 	echo "${log_file}"
 }
 
-# run_full_test.sh dispatch を使って dispatch し、完了まで待って conclusion を検証する。
+# Dispatches via run_full_test.sh's `dispatch` subcommand and waits for
+# it to complete, failing unless the run succeeds.
 dispatch_and_wait() {
 	local os="$1" version="$2" method="$3"
 	local id conclusion
@@ -99,16 +107,17 @@ dispatch_and_wait() {
 }
 
 
-# キャッシュ済み run は headSha が現在の HEAD と一致するときだけ再利用する
-# (別 commit の成功 run を現在の変更の証拠にしないため。dispatch 側の
-# run_full_test.sh も origin/<branch> が HEAD と一致することを要求する)。
+# A cached run is only reused when its headSha matches the current
+# HEAD (so a successful run from another commit is never treated as
+# evidence for the current change; the dispatching run_full_test.sh
+# also requires that origin/<branch> matches HEAD).
 run_matches_head() {
 	local id="$1" sha
 	sha="$(gh run view "${id}" --json headSha --jq .headSha)"
 	[ "${sha}" = "$(git -C "${REPO_ROOT}" rev-parse HEAD)" ]
 }
 
-# キャッシュされた run id があればそれを使い (完了を待ち直す)、無ければ dispatch する。
+# Reuses a cached run id (waiting for it again) if present, otherwise dispatches.
 get_or_dispatch_and_wait() {
 	local os="$1" version="$2" method="$3" f cached conclusion
 	f="$(run_id_file "${os}" "${version}" "${method}")"
@@ -133,12 +142,12 @@ get_or_dispatch_and_wait() {
 	dispatch_and_wait "${os}" "${version}" "${method}"
 }
 
-# AC-1 / AC-2: outputs (version / rocm-path) / 環境変数 (ROCM_PATH) /
-# hipcc --version (無ければ clang --version) を検証する。
-# expected_rocm_path に `venv` を渡すと、完全一致ではなく
-# <RUNNER_TEMP>\setup-rocm-venv\ で始まるかの prefix 判定になる (pip 経路の
-# rocm-path は `rocm-sdk path --root` の実行時解決値のため、他経路のように
-# 固定パスと完全一致しない)。
+# Verifies outputs (version / rocm-path), the ROCM_PATH environment
+# variable, and hipcc --version (falling back to clang --version).
+# Passing `venv` as expected_rocm_path switches from an exact match to
+# a prefix check against `<RUNNER_TEMP>\setup-rocm-venv\` (the pip
+# route's rocm-path is resolved at runtime via `rocm-sdk path --root`,
+# so unlike the other routes it does not match a fixed path exactly).
 verify_windows_outputs() {
 	local os="$1" version="$2" method="$3" version_regex="$4" expected_rocm_path="$5"
 	local id log_file out_version out_rocm_path env_rocm_path runner_temp expected_prefix
@@ -184,7 +193,7 @@ cmd_ac2() {
 }
 
 cmd_ac3() {
-	# AC-1 の windows-2022 (latest) run を run_full_test.sh のキャッシュ経由で再利用する。
+	# Reuses ac1's windows-2022 (latest) run via run_full_test.sh's cache.
 	"${RUN_FULL_TEST}" cross-compile windows-2022 latest auto
 }
 

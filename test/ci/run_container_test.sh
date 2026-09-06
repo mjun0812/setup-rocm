@@ -1,39 +1,43 @@
 #!/usr/bin/env bash
 #
-# T-005 (Linux RHEL系 dnf経路の導入と container CI) の
-# Acceptance Criteria を、実際の GitHub Actions container job 上で検証する minimal-harness。
+# Verifies the RHEL-family dnf route in a container CI job on real
+# GitHub Actions: a minimal-harness that dispatches
+# .github/workflows/container-test.yml (workflow_dispatch: container /
+# version / method / debug) via `gh workflow run` and checks the
+# action's outputs, environment variables, hipcc, and a gfx942
+# cross-compile from the run's log and job steps.
+# Structured after test/ci/run_full_test.sh (dispatch -> run id lookup
+# (numeric check) -> polling -> log/steps verification, macOS bash 3.2
+# compatible, discards `gh workflow run`'s stdout, and a dispatch lock
+# to avoid mixing up runs across concurrent invocations).
 #
-# .github/workflows/container-test.yml (workflow_dispatch: container / version / method / debug) を
-# `gh workflow run` で起動し、実行中の run から action の outputs / 環境変数 /
-# hipcc / クロスコンパイル結果をログと job steps から検証する。
-# 構造は test/ci/run_full_test.sh (T-004) を踏襲する (dispatch → run ID 特定 (数字検証) →
-# ポーリング → ログ / steps 検証、macOS bash 3.2 対応、`gh workflow run` の stdout を捨てる、
-# 同時実行時の run 取り違え防止のための dispatch ロック)。
+# Contract shared with the implementation:
+#   - .github/workflows/container-test.yml has a workflow_dispatch with
+#     inputs container (string) / version (string, default latest) /
+#     method (string, default auto), and calls the reusable workflow
+#     .github/workflows/_test-container.yml via `uses:`.
+#   - _test-container.yml's verification step echoes the action's
+#     outputs as `outputs.version=<value>` / `outputs.rocm-path=<value>`,
+#     one per line, and also echoes `ROCM_PATH=$ROCM_PATH`. It runs
+#     `hipcc --version`.
+#   - A step whose name contains "Cross-compile" compiles a minimal HIP
+#     source (a single __global__ kernel) with
+#     `hipcc --offload-arch=gfx942 -c`.
 #
-# 前提 (契約。実装側と共有):
-#   - .github/workflows/container-test.yml に workflow_dispatch があり、
-#     inputs は container (string) / version (string, default latest) / method (string, default auto)。
-#     reusable workflow .github/workflows/_test-container.yml を uses: で呼ぶ。
-#   - _test-container.yml の検証 step は action の outputs を
-#     `outputs.version=<値>` / `outputs.rocm-path=<値>` の形で1行ずつ echo し、
-#     `echo "ROCM_PATH=$ROCM_PATH"` も出す。`hipcc --version` を実行する。
-#   - 最小 HIP ソース (__global__ kernel 1つ) を
-#     `hipcc --offload-arch=gfx942 -c` でコンパイルする step を持ち、
-#     step 名に "Cross-compile" を含む。
-#
-# 使い方:
-#   test/ci/run_container_test.sh ac1     # AC-1: almalinux:9 / manylinux_2_28_x86_64 の outputs・環境変数・hipcc を検証
-#   test/ci/run_container_test.sh ac2     # AC-2: 同じ組み合わせでクロスコンパイル (Cross-compile step) を検証
+# Usage:
+#   test/ci/run_container_test.sh ac1     # verifies outputs, environment variables, and hipcc on almalinux:9 / manylinux_2_28_x86_64
+#   test/ci/run_container_test.sh ac2     # verifies the cross-compile (Cross-compile step) on the same combinations
 #   test/ci/run_container_test.sh dispatch <container> <version> <method>
 #   test/ci/run_container_test.sh wait <run_id>
 #   test/ci/run_container_test.sh verify <container> <version> <method> <version_regex> <expected_rocm_path>
 #   test/ci/run_container_test.sh cross-compile <container> <version> <method>
 #
-# 依存: git, gh (workflow scope で認証済み)。
-# macOS の bash 3.2 でも動く構文 (連想配列を使わない) にしている。
+# Dependencies: git, gh (authenticated with the workflow scope).
+# Written to run under macOS's bash 3.2 too (no associative arrays).
 #
-# 実行対象の branch (feat/setup-rocm) は T-004 までの成果で既に origin へ push 済みの前提。
-# ここでは push を行わない (worktreeへのcommit/pushはverifierの責務外)。
+# The branch under test (feat/setup-rocm) is assumed to already be
+# pushed to origin; this script does not push (pushing is outside a
+# verifier's responsibility).
 
 set -euo pipefail
 
@@ -43,24 +47,26 @@ STATE_DIR="${STATE_DIR:-${SCRIPT_DIR}/.state}"
 WORKFLOW="container-test.yml"
 BRANCH="feat/setup-rocm"
 
-# run 完了待ちのポーリング間隔・上限 (秒)
+# Polling interval and timeout while waiting for a run to complete (seconds)
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-3600}"
 
-# dispatch した run が gh run list に現れるまでの待ち (秒)
+# Wait time for a dispatched run to appear in gh run list (seconds)
 DISPATCH_WAIT_INTERVAL=3
 DISPATCH_WAIT_TIMEOUT=60
 
-# dispatch -> run id 特定 -> .state/*.id への記録 を直列化するロック。
-# 複数プロセスを同時に起動すると、それぞれの `gh workflow run` 直後の
-# find_new_run_id が「dispatch 後に作られた最新の run」を選ぶため、
-# 両方が同じ run を掴んでしまう競合が起きる。この区間を mkdir (atomic) で
-# 直列化して防ぐ。test/ci/run_full_test.sh と同じロックディレクトリ名にすることで、
-# 両ハーネスを同時に走らせても直列化される。
+# Lock that serializes dispatch -> run id lookup -> recording to
+# .state/*.id. Running multiple processes concurrently would let each
+# one's find_new_run_id (right after its own `gh workflow run`) pick
+# the same "most recent run created after dispatch", causing both to
+# grab the same run. This section is serialized with mkdir (atomic) to
+# prevent that race. Uses the same lock directory name as
+# test/ci/run_full_test.sh, so both harnesses serialize even when run
+# at the same time.
 DISPATCH_LOCK_DIR="${STATE_DIR}/.dispatch.lock"
 DISPATCH_LOCK_TIMEOUT="${DISPATCH_LOCK_TIMEOUT:-120}"
 
-# run id (databaseId) の形式。gh run list --json databaseId は常に数値。
+# Format of a run id (databaseId). gh run list --json databaseId is always numeric.
 RUN_ID_RE='^[0-9]+$'
 
 log() {
@@ -80,9 +86,10 @@ run_id_file() {
 	echo "${STATE_DIR}/run-${key}.id"
 }
 
-# .state/run-*.id に既に記録済みの run id 一覧 (前後に空白付きの1行) を返す。
-# 同時実行中の他プロセスが既に claim した run を、新たな dispatch の
-# discovery で再び拾わないようにするための除外リストとして使う。
+# Returns the run ids already recorded in .state/run-*.id, as one
+# space-padded line. Used as an exclusion list so a new dispatch's
+# discovery does not re-pick a run already claimed by another
+# concurrently running process.
 claimed_run_ids() {
 	local f v ids=""
 	for f in "${STATE_DIR}"/run-*.id; do
@@ -94,8 +101,9 @@ claimed_run_ids() {
 	echo " ${ids} "
 }
 
-# dispatch -> run id 特定 -> .state/*.id への記録 の区間用ロック。
-# mkdir はディレクトリが既に存在すると失敗するため atomic に排他できる。
+# Lock for the dispatch -> run id lookup -> recording to .state/*.id
+# section. mkdir fails if the directory already exists, so it gives
+# atomic mutual exclusion.
 acquire_dispatch_lock() {
 	local waited=0
 	while ! mkdir "${DISPATCH_LOCK_DIR}" 2>/dev/null; do
@@ -105,7 +113,8 @@ acquire_dispatch_lock() {
 		fi
 		sleep 1
 	done
-	# fail() 経由の異常終了でもロックを解放できるよう、取得できた時点で trap する。
+	# Trap as soon as the lock is acquired, so it is still released on an
+	# abnormal exit via fail().
 	trap release_dispatch_lock EXIT
 }
 
@@ -113,9 +122,10 @@ release_dispatch_lock() {
 	rmdir "${DISPATCH_LOCK_DIR}" 2>/dev/null || true
 }
 
-# 検査対象の commit はローカル HEAD。dispatch は origin/${BRANCH} が HEAD と一致するときだけ行い、
-# キャッシュ済み run は headSha が HEAD と一致するときだけ再利用する (古い commit の成功 run を
-# 現在の変更の結果として扱わないため)。
+# The commit under test is the local HEAD. Dispatch only happens when
+# origin/${BRANCH} matches HEAD, and a cached run is only reused when
+# its headSha matches HEAD (so a successful run from an older commit is
+# never treated as evidence for the current change).
 target_sha() {
 	git -C "${REPO_ROOT}" rev-parse HEAD
 }
@@ -134,8 +144,9 @@ run_matches_head() {
 	[ "${sha}" = "$(target_sha)" ]
 }
 
-# gh run list の直近5件から、before_ts より後に作られた workflow_dispatch run の
-# databaseId のうち最新のものを1つ返す (無ければ空文字)。databaseId は数値のみを信頼する。
+# Returns the newest databaseId of a workflow_dispatch run created
+# after before_ts, from gh run list's most recent 5 entries (empty
+# string if none). Only numeric databaseId values are trusted.
 find_new_run_id() {
 	local before_ts="$1"
 	local best_id="" best_created="" rid rcreated revent
@@ -164,21 +175,24 @@ dispatch_run() {
 	local container="$1" version="$2" method="$3"
 	local before_ts id waited
 
-	# dispatch -> run id 特定 -> .state/*.id への記録 を他プロセスと排他する。
-	# (同時に複数の verify/cross-compile を走らせたときに、互いの run を
-	# 取り違えないようにするための直列化。詳細は DISPATCH_LOCK_DIR の定義を参照。)
+	# Excludes other processes from dispatch -> run id lookup -> recording
+	# to .state/*.id. (Serializes concurrently running verify/cross-compile
+	# calls so they don't mix up each other's runs; see the DISPATCH_LOCK_DIR
+	# definition for details.)
 	acquire_dispatch_lock
 	require_pushed_head
 
 	before_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 	log "gh workflow run ${WORKFLOW} --ref ${BRANCH} -f container=${container} -f version=${version} -f method=${method}"
-	# bash の command substitution ($()) は内部の set -e を早期終了に使わないため、
-	# gh workflow run 自体の失敗はここで明示的に検知して即 fail() する
-	# (そうしないと後続の discovery ループが無駄に timeout まで回ってしまう)。
-	# 標準出力は /dev/null に捨てる: 新しめの gh は成功時に run URL を stdout に返すため、
-	# ここで捨てないと呼び出し元の `id="$(dispatch_run ...)"` が URL 行と
-	# 本来の databaseId 行を両方まとめて捕捉してしまう。
+	# bash's command substitution ($()) doesn't let an inner set -e trigger
+	# an early exit, so a failure of gh workflow run itself is detected
+	# explicitly here and fails immediately via fail() (otherwise the
+	# discovery loop below would spin uselessly until its timeout).
+	# stdout is discarded to /dev/null: newer gh versions print the run URL
+	# to stdout on success, and without discarding it, the caller's
+	# `id="$(dispatch_run ...)"` would capture both the URL line and the
+	# actual databaseId line together.
 	gh workflow run "${WORKFLOW}" --ref "${BRANCH}" \
 		-f "container=${container}" -f "version=${version}" -f "method=${method}" \
 		>/dev/null ||
@@ -200,16 +214,18 @@ dispatch_run() {
 	log "dispatched run id: ${id}"
 	echo "${id}" >"$(run_id_file "${container}" "${version}" "${method}")"
 
-	# 他プロセスの dispatch を待たせ続けないよう、記録できた時点ですぐ解放する
-	# (このあとの wait_run は長時間かかるためロック範囲に含めない)。
+	# Release the lock as soon as recording is done, so other processes'
+	# dispatch isn't kept waiting (the following wait_run can take a long
+	# time, so it's kept out of the lock's scope).
 	release_dispatch_lock
 
 	echo "${id}"
 }
 
 get_or_dispatch_run() {
-	# AC-1/AC-2 が同じ run を使い回すためのヘルパー。
-	# run id のキャッシュが無ければ (または壊れていれば) 自分で dispatch する (単独実行でも動く)。
+	# Helper so outputs/cross-compile verification can share the same run.
+	# Dispatches on its own if there's no run id cache (or it's broken), so
+	# it also works when called standalone.
 	local container="$1" version="$2" method="$3" f cached
 	f="$(run_id_file "${container}" "${version}" "${method}")"
 	if [ -s "${f}" ]; then
@@ -258,7 +274,8 @@ fetch_log() {
 	echo "${log_file}"
 }
 
-# AC-1: outputs (version / rocm-path) / 環境変数 (ROCM_PATH) / hipcc --version を検証する
+# Verifies outputs (version / rocm-path), the ROCM_PATH environment
+# variable, and hipcc --version
 verify_outputs() {
 	local container="$1" version="$2" method="$3" version_regex="$4" expected_rocm_path="$5"
 	local id conclusion log_file out_version out_rocm_path env_rocm_path
@@ -284,10 +301,10 @@ verify_outputs() {
 
 	grep -qE 'hipcc --version|HIP version' "${log_file}" || fail "run ${id} (container=${container}): hipcc --version output not found in log"
 
-	log "AC-1 OK for container=${container}: version=${out_version} rocm-path=${out_rocm_path}"
+	log "OK for container=${container}: version=${out_version} rocm-path=${out_rocm_path}"
 }
 
-# AC-2: 最小 HIP ソースのクロスコンパイル (Cross-compile step) を検証する
+# Verifies the cross-compile of a minimal HIP source (Cross-compile step)
 verify_cross_compile() {
 	local container="$1" version="$2" method="$3"
 	local id conclusion log_file step_conclusion
@@ -306,12 +323,13 @@ verify_cross_compile() {
 	log_file="$(fetch_log "${id}")"
 	grep -qE -- '--offload-arch=gfx942' "${log_file}" || fail "run ${id} (container=${container}): --offload-arch=gfx942 not found in log"
 
-	log "AC-2 OK for container=${container}: Cross-compile step succeeded"
+	log "OK for container=${container}: Cross-compile step succeeded"
 }
 
 cmd_ac1() {
 	local c
-	# 両 image を先に dispatch してから待つ (GitHub 上で並列に実行させるため)。
+	# Dispatches both images first, then waits for them (so GitHub runs them
+	# in parallel).
 	for c in almalinux:9 quay.io/pypa/manylinux_2_28_x86_64; do
 		get_or_dispatch_run "${c}" latest package-manager >/dev/null
 	done

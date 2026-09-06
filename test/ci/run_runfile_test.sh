@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 #
-# T-006 (Linux runfile経路と `auto` のfallback (統合)) の
-# Acceptance Criteria を、test/ci/run_full_test.sh (T-004の検査ハーネス) の
-# `verify` / `cross-compile` サブコマンドを呼び出して検証する薄いラッパー。
-# run_full_test.sh 自体は変更しない (呼び出すだけ)。
+# Verifies the Linux runfile route and `auto`'s fallback to it, by
+# calling test/ci/run_full_test.sh's `verify` / `cross-compile`
+# subcommands. A thin wrapper that does not modify run_full_test.sh
+# itself (just calls it).
 #
-# runfile installer の一覧 (https://repo.radeon.com/rocm/installer/rocm-runfile-installer/) の
-# 「全体の最新版」「7.14系の最新版」は、実行のたびにディレクトリindexから動的に取得する
-# (hard-codeしない。執筆時点ではそれぞれ 10.0 / 7.14.1)。
+# The runfile installer index's
+# (https://repo.radeon.com/rocm/installer/rocm-runfile-installer/)
+# overall latest version and its 7.14-series latest version are
+# fetched dynamically from the directory index on every run (not
+# hard-coded; at the time of writing these are 10.0 and 7.14.1
+# respectively).
 #
-# 使い方:
-#   test/ci/run_runfile_test.sh ac1   # AC-1: ubuntu-22.04, version=latest, method=runfile
-#   test/ci/run_runfile_test.sh ac2   # AC-2: ubuntu-22.04, version=7.14, method=auto (package-managerに無くrunfileへfallback)
-#   test/ci/run_runfile_test.sh ac3   # AC-3: AC-1と同じ run (ubuntu-22.04, latest, runfile) でのクロスコンパイル検証
+# Usage:
+#   test/ci/run_runfile_test.sh ac1   # ubuntu-22.04, version=latest, method=runfile
+#   test/ci/run_runfile_test.sh ac2   # ubuntu-22.04, version=7.14, method=auto (falls back to runfile since package-manager doesn't have it)
+#   test/ci/run_runfile_test.sh ac3   # verifies the cross-compile on ac1's run (ubuntu-22.04, latest, runfile)
 #
-# 依存: curl, git, gh (workflow scope で認証済み)。run_full_test.sh と同じ前提を共有する。
-# macOS の bash 3.2 でも動く構文 (連想配列を使わない) にしている。
+# Dependencies: curl, git, gh (authenticated with the workflow scope).
+# Shares the same assumptions as run_full_test.sh. Written to run
+# under macOS's bash 3.2 too (no associative arrays).
 
 set -euo pipefail
 
@@ -32,8 +36,9 @@ fail() {
 	exit 1
 }
 
-# runfile installer index の `rocm-rel-<ver>/` エントリから、数値バージョン文字列
-# (例: "7.14.1"、"10.0") を数値順 (昇順) で1行ずつ返す
+# Returns the numeric version strings (e.g. "7.14.1", "10.0") parsed
+# from the runfile installer index's `rocm-rel-<ver>/` entries, sorted
+# ascending.
 fetch_runfile_versions() {
 	curl -fsSL "${RUNFILE_INDEX_URL}" \
 		| grep -oE 'href="rocm-rel-[^"]*/"' \
@@ -42,7 +47,8 @@ fetch_runfile_versions() {
 		| sort -t. -k1,1n -k2,2n -k3,3n
 }
 
-# バージョン文字列を正規表現エスケープ (「.」を「\.」に) し、^...$ で囲む
+# Escapes a version string for use in a regex (escaping "." as "\.")
+# and wraps it in ^...$.
 version_regex() {
 	local escaped
 	escaped="$(printf '%s' "$1" | sed 's/\./\\./g')"
@@ -72,7 +78,7 @@ cmd_ac2() {
 }
 
 cmd_ac3() {
-	# AC-1 と同じ (os, version, method) の run を run_full_test.sh のキャッシュ経由で再利用する
+	# Reuses the same (os, version, method) run as ac1, via run_full_test.sh's cache.
 	"${RUN_FULL_TEST}" cross-compile ubuntu-22.04 latest runfile
 }
 

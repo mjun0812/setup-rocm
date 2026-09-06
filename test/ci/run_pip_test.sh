@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# T-004 (Linux pip route installs ROCm into an action-local venv and lets a
-# later step cross-compile with hipcc) and T-005 AC-1 (same, on the Windows
-# pip route with hipcc.exe) Acceptance Criteria, verified against a real
-# GitHub-hosted runner by calling the `dispatch` / `wait` / `cross-compile`
-# subcommands of test/ci/run_full_test.sh (the T-004 harness for the
-# package-manager route). run_full_test.sh itself is not modified.
+# Verifies that the Linux pip route installs ROCm into an action-local
+# venv and lets a later step cross-compile with hipcc, and that the
+# same holds on the Windows pip route with hipcc.exe. Verified against
+# a real GitHub-hosted runner by calling the `dispatch` / `wait` /
+# `cross-compile` subcommands of test/ci/run_full_test.sh (the harness
+# for the package-manager route). run_full_test.sh itself is not
+# modified.
 #
 # The run id cache file naming (STATE_DIR/run-<os>-<version>-<method>.id) uses
 # the same convention as run_full_test.sh, so this script's dispatch and
@@ -38,9 +39,9 @@
 #     `hipcc --offload-arch=gfx942 -c` on a minimal HIP source.
 #
 # Usage:
-#   test/ci/run_pip_test.sh ac1   # AC-1: ubuntu-22.04, method=pip, version=latest
-#   test/ci/run_pip_test.sh ac2   # AC-2 (T-005 AC-1): windows-2022, method=pip, version=latest
-#   test/ci/run_pip_test.sh all   # every AC assigned to this harness (currently: ac1, ac2)
+#   test/ci/run_pip_test.sh ac1   # verifies ubuntu-22.04, method=pip, version=latest
+#   test/ci/run_pip_test.sh ac2   # verifies windows-2022, method=pip, version=latest
+#   test/ci/run_pip_test.sh all   # runs every check assigned to this harness (currently: ac1, ac2)
 #
 # Dependencies: git, gh (authenticated with the workflow scope). Shares the
 # same assumptions as run_full_test.sh. Written to run under macOS's bash 3.2
@@ -139,7 +140,7 @@ get_or_dispatch_and_wait() {
 	dispatch_and_wait "${os}" "${version}" "${method}"
 }
 
-# AC-1 / AC-2: verifies outputs.version / outputs.rocm-path / ROCM_PATH /
+# Verifies outputs.version / outputs.rocm-path / ROCM_PATH /
 # hipcc for the pip route. Unlike run_full_test.sh's `verify` (exact match on
 # rocm-path), rocm-path here is only known to be a subdirectory of
 # <RUNNER_TEMP>/setup-rocm-venv, so it is checked as a prefix against the

@@ -5,15 +5,18 @@
 # ///
 """Regression test for check_full_test_matrix.py's `pip` requirement.
 
-T-007 AC-1 (spec.md: 週次 matrix の Linux method から `pip` を外すと静的検査
-(test/ci/check_full_test_matrix.py) が失敗する) の検査。check_full_test_matrix.py
-自体は変更しない (実装は full-test.yml の matrix.method と
-check_full_test_matrix.py の REQUIRED_METHODS に `pip` を加える側の責務)。
+Verifies that removing `pip` from the weekly matrix's Linux method list
+makes the static check (test/ci/check_full_test_matrix.py) fail.
+check_full_test_matrix.py itself is not modified (adding `pip` to
+full-test.yml's matrix.method and to check_full_test_matrix.py's
+REQUIRED_METHODS is the implementation's responsibility).
 
-check_full_test_matrix.py は `Path(__file__).resolve().parents[2]` で repo root
-を求めるため、workflow だけを差し替えることはできない。そこで
-check_full_test_matrix.py と .github/workflows/*.yml を repo-root と同じ形の
-一時ディレクトリへコピーし、コピー側の full-test.yml だけを書き換えて検査する。
+check_full_test_matrix.py resolves the repo root via
+`Path(__file__).resolve().parents[2]`, so the workflow file alone
+cannot be swapped in isolation. Instead, this test copies
+check_full_test_matrix.py and .github/workflows/*.yml into a temporary
+directory shaped like the repo root, rewrites only the copy's
+full-test.yml, and runs the check against that copy.
 
 Checks:
   1. the real repo (unmodified) passes: `uv run check_full_test_matrix.py` exits 0
