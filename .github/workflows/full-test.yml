@@ -56,6 +56,7 @@ jobs:
         method:
           - package-manager
           - runfile
+          - pip
           - auto
         version:
           - latest
@@ -65,10 +66,14 @@ jobs:
             method: package-manager
           - os: windows-2022
             method: runfile
+          - os: windows-2022
+            method: pip
           - os: windows-2025
             method: package-manager
           - os: windows-2025
             method: runfile
+          - os: windows-2025
+            method: pip
     uses: ./.github/workflows/_test.yml
     with:
       os: ${{ matrix.os }}

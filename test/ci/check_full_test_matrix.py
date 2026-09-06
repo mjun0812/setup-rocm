@@ -11,8 +11,8 @@ other harnesses under test/ci/. This script checks statically that:
   (a) .github/workflows/full-test.yml has both on.schedule (weekly) and
       on.workflow_dispatch with the os/version/method/debug inputs
   (b) the weekly matrix job covers ubuntu-22.04 / ubuntu-24.04 /
-      windows-2022 / windows-2025 and the package-manager / runfile / auto
-      methods
+      windows-2022 / windows-2025 and the package-manager / runfile / pip /
+      auto methods
   (c) that job uses ./.github/workflows/_test.yml
   (d) .github/workflows/_test.yml has a "Cross-compile" step for Linux and
       one for Windows
@@ -38,7 +38,7 @@ TEST_YML = REPO_ROOT / ".github" / "workflows" / "_test.yml"
 RELEASE_YML = REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 REQUIRED_OS = ("ubuntu-22.04", "ubuntu-24.04", "windows-2022", "windows-2025")
-REQUIRED_METHODS = ("package-manager", "runfile", "auto")
+REQUIRED_METHODS = ("package-manager", "runfile", "pip", "auto")
 REQUIRED_DISPATCH_INPUTS = ("os", "version", "method", "debug")
 RELEASE_TAG_PATTERN = "v[0-9]+.[0-9]+.[0-9]+"
 
