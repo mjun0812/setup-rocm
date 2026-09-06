@@ -83,6 +83,7 @@ jobs:
         run: |
           echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
           echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
+          echo "RUNNER_TEMP=$RUNNER_TEMP"
 
           echo "PATH: $PATH"
 
@@ -135,6 +136,7 @@ jobs:
           echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
           echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
           echo "ROCM_PATH=$env:ROCM_PATH"
+          echo "RUNNER_TEMP=$env:RUNNER_TEMP"
 
           $ok = $false
           try {

@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as tc from '@actions/tool-cache';
 import * as io from '@actions/io';
-import { LinuxDistribution, isDebianBased, isFedoraBased } from './os_arch';
+import { OS, LinuxDistribution, isDebianBased, isFedoraBased } from './os_arch';
 import { hasRootPrivileges } from './utils';
 import { resolveRunfileUrl, findWindowsInstaller, notFoundError } from './rocm';
 import {
@@ -13,6 +13,8 @@ import {
   ROCM_APT_REPO_URL,
   ROCM_EL_REPO_URL,
   ROCM_META_PACKAGE,
+  ROCM_PIP_INDEX_URL,
+  ROCM_PIP_VENV_DIR,
   WINDOWS_HIP_SDK_INSTALLERS,
 } from './const';
 
@@ -336,4 +338,76 @@ export async function installWindows(
   await io.rmRF(installerPath);
 
   return { version, rocmPath };
+}
+
+/**
+ * Locate the runner's Python interpreter (`python3` on Linux, `python` on Windows)
+ * @param osType - Operating system type
+ * @returns Path to the Python interpreter
+ */
+async function findPython(osType: OS): Promise<string> {
+  const pythonName = osType === OS.WINDOWS ? 'python' : 'python3';
+  const pythonPath = await io.which(pythonName);
+  if (!pythonPath) {
+    throw new Error(
+      `${pythonName} was not found on PATH. Add actions/setup-python before this action to provide a Python interpreter for the pip method.`
+    );
+  }
+  return pythonPath;
+}
+
+/**
+ * Path to a console-script binary inside a venv (Linux: `bin/<name>`, Windows: `Scripts/<name>.exe`)
+ * @param venvDir - Path to the venv
+ * @param osType - Operating system type
+ * @param name - Binary name, without extension
+ */
+function venvBinPath(venvDir: string, osType: OS, name: string): string {
+  return osType === OS.WINDOWS
+    ? path.win32.join(venvDir, 'Scripts', `${name}.exe`)
+    : path.join(venvDir, 'bin', name);
+}
+
+/**
+ * Install ROCm via the AMD pip index (`rocm[devel]==<version>`) into an action-local venv
+ * under `RUNNER_TEMP`, then run `rocm-sdk init` to materialize the devel component
+ * @param version - Resolved ROCm version (e.g. "10.0.0")
+ * @param osType - Operating system type
+ * @returns The ROCm root path (`rocm-sdk path --root`) and its bin directory (`rocm-sdk path --bin`)
+ */
+export async function installPip(
+  version: string,
+  osType: OS
+): Promise<{ rocmPath: string; binPath: string }> {
+  const python = await findPython(osType);
+  const venvDir = path.join(getTempDir(), ROCM_PIP_VENV_DIR);
+
+  core.info(`Creating venv at ${venvDir}...`);
+  await exec.exec(`"${python}"`, ['-m', 'venv', venvDir]);
+
+  const pip = venvBinPath(venvDir, osType, 'pip');
+  core.info(`Installing rocm[devel]==${version} from ${ROCM_PIP_INDEX_URL}...`);
+  await exec.exec(`"${pip}"`, [
+    'install',
+    '--index-url',
+    ROCM_PIP_INDEX_URL,
+    `rocm[devel]==${version}`,
+  ]);
+
+  const rocmSdk = venvBinPath(venvDir, osType, 'rocm-sdk');
+  core.info('Running rocm-sdk init...');
+  await exec.exec(`"${rocmSdk}"`, ['init']);
+
+  const rocmPath = (await exec.getExecOutput(`"${rocmSdk}"`, ['path', '--root'])).stdout.trim();
+  const binPath = (await exec.getExecOutput(`"${rocmSdk}"`, ['path', '--bin'])).stdout.trim();
+
+  const hipcc =
+    osType === OS.WINDOWS
+      ? path.win32.join(rocmPath, 'bin', 'hipcc.exe')
+      : path.join(rocmPath, 'bin', 'hipcc');
+  if (!fs.existsSync(hipcc)) {
+    throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
+  }
+
+  return { rocmPath, binPath };
 }

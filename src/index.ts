@@ -21,13 +21,15 @@ import {
   fetchAptVersions,
   fetchElVersions,
   fetchRunfileVersions,
+  fetchPipVersions,
   ROCM_APT_INDEX_URL,
   ROCM_EL_INDEX_URL,
   ROCM_RUNFILE_INDEX_URL,
   resolveAutoVersion,
 } from './rocm';
 import type { InstallRoute } from './rocm';
-import { installPackageManager, installRunfile, installWindows } from './install';
+import { ROCM_PIP_INDEX_URL } from './const';
+import { installPackageManager, installRunfile, installWindows, installPip } from './install';
 import { getErrorMessage } from './utils';
 
 /**
@@ -51,17 +53,18 @@ async function settleListing(
 }
 
 /**
- * Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux.
+ * Resolve the ROCm version and route (package-manager/runfile/pip), then install ROCm on Linux.
  * @param inputVersion - Raw `version` input
  * @param method - Parsed `method` input
  * @param distro - Linux distribution information
- * @returns The resolved version and the path to the ROCm installation
+ * @returns The resolved version, the path to the ROCm installation, and (pip route only) its
+ * bin directory
  */
 async function resolveAndInstallLinux(
   inputVersion: string,
   method: InstallMethod,
   distro: LinuxDistribution
-): Promise<{ version: string; rocmPath: string }> {
+): Promise<{ version: string; rocmPath: string; binPath?: string }> {
   const debianBased = isDebianBased(distro);
   const major = distro.version.split('.')[0];
   const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
@@ -86,6 +89,13 @@ async function resolveAndInstallLinux(
       throw notFoundError(inputVersion, [ROCM_RUNFILE_INDEX_URL]);
     }
     route = 'runfile';
+  } else if (method === 'pip') {
+    const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
+    version = findRocmVersion(inputVersion, await fetchPipVersions('linux_x86_64'));
+    if (!version) {
+      throw notFoundError(inputVersion, [pipIndexUrl]);
+    }
+    route = 'pip';
   } else {
     // auto: the newest match across both routes wins, so `latest` is the newest ROCm
     // release even when only the runfile installer ships it.
@@ -110,6 +120,11 @@ async function resolveAndInstallLinux(
     ({ version, route } = resolved);
   }
   core.info(`Resolved ROCm ${version} via ${route}`);
+
+  if (route === 'pip') {
+    const { rocmPath, binPath } = await installPip(version!, OS.LINUX);
+    return { version: version!, rocmPath, binPath };
+  }
 
   if (route === 'package-manager') {
     try {
@@ -140,12 +155,13 @@ async function resolveAndInstallLinux(
  * Export ROCm environment variables and add its bin directory to PATH
  * @param osType - Operating system type
  * @param rocmPath - Path to the ROCm installation
+ * @param binPath - Bin directory to add to PATH (pip route only; defaults to `<rocmPath>/bin`)
  */
-function setEnvironmentVariables(osType: OS, rocmPath: string): void {
+function setEnvironmentVariables(osType: OS, rocmPath: string, binPath?: string): void {
   core.exportVariable('ROCM_PATH', rocmPath);
   core.exportVariable('ROCM_HOME', rocmPath);
   core.exportVariable('HIP_PATH', rocmPath);
-  core.addPath(path.join(rocmPath, 'bin'));
+  core.addPath(binPath ?? path.join(rocmPath, 'bin'));
   if (osType === OS.LINUX) {
     // Never leave an empty element (trailing ':'): the dynamic linker would
     // search the current working directory for it.
@@ -177,6 +193,7 @@ async function run(): Promise<void> {
 
     let version: string;
     let rocmPath: string;
+    let binPath: string | undefined;
 
     if (osType === OS.LINUX) {
       const distro = getLinuxDistribution();
@@ -191,6 +208,7 @@ async function run(): Promise<void> {
       const result = await resolveAndInstallLinux(inputVersion, method, distro);
       version = result.version;
       rocmPath = result.rocmPath;
+      binPath = result.binPath;
     } else {
       const windowsVersion = getWindowsVersion();
       core.info(
@@ -207,7 +225,7 @@ async function run(): Promise<void> {
     }
 
     // Set environment variables
-    setEnvironmentVariables(osType, rocmPath);
+    setEnvironmentVariables(osType, rocmPath, binPath);
 
     // Set outputs
     core.setOutput('version', version);

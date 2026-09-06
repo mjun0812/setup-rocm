@@ -30,6 +30,11 @@ export const ROCM_META_PACKAGE = 'rocm-hip-sdk';
 export const ROCM_PIP_INDEX_URL = 'https://stable.repo.amd.com/rocm/whl-next/';
 
 /**
+ * Directory name (under `RUNNER_TEMP`) of the action-local venv the pip route installs into
+ */
+export const ROCM_PIP_VENV_DIR = 'setup-rocm-venv';
+
+/**
  * URL of the ROCm apt repository's GPG signing key
  */
 export const ROCM_GPG_KEY_URL = 'https://repo.radeon.com/rocm/rocm.gpg.key';

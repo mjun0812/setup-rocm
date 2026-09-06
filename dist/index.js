@@ -41,6 +41,7 @@ events = __toESM(events, 1);
 let assert = require("assert");
 let util = require("util");
 util = __toESM(util, 1);
+let string_decoder = require("string_decoder");
 let child_process = require("child_process");
 child_process = __toESM(child_process, 1);
 let timers = require("timers");
@@ -17436,6 +17437,47 @@ function exec(commandLine, args, options) {
 		return new ToolRunner(toolPath, args, options).exec();
 	});
 }
+/**
+* Exec a command and get the output.
+* Output will be streamed to the live console.
+* Returns promise with the exit code and collected stdout and stderr
+*
+* @param     commandLine           command to execute (can include additional args). Must be correctly escaped.
+* @param     args                  optional arguments for tool. Escaping is handled by the lib.
+* @param     options               optional exec options.  See ExecOptions
+* @returns   Promise<ExecOutput>   exit code, stdout, and stderr
+*/
+function getExecOutput(commandLine, args, options) {
+	return __awaiter$5(this, void 0, void 0, function* () {
+		var _a, _b;
+		let stdout = "";
+		let stderr = "";
+		const stdoutDecoder = new string_decoder.StringDecoder("utf8");
+		const stderrDecoder = new string_decoder.StringDecoder("utf8");
+		const originalStdoutListener = (_a = options === null || options === void 0 ? void 0 : options.listeners) === null || _a === void 0 ? void 0 : _a.stdout;
+		const originalStdErrListener = (_b = options === null || options === void 0 ? void 0 : options.listeners) === null || _b === void 0 ? void 0 : _b.stderr;
+		const stdErrListener = (data) => {
+			stderr += stderrDecoder.write(data);
+			if (originalStdErrListener) originalStdErrListener(data);
+		};
+		const stdOutListener = (data) => {
+			stdout += stdoutDecoder.write(data);
+			if (originalStdoutListener) originalStdoutListener(data);
+		};
+		const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), {
+			stdout: stdOutListener,
+			stderr: stdErrListener
+		});
+		const exitCode = yield exec(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+		stdout += stdoutDecoder.end();
+		stderr += stderrDecoder.end();
+		return {
+			exitCode,
+			stdout,
+			stderr
+		};
+	});
+}
 os$2.default.platform();
 os$2.default.arch();
 /**
@@ -17705,6 +17747,14 @@ const WINDOWS_HIP_SDK_INSTALLERS = {
 */
 const ROCM_META_PACKAGE = "rocm-hip-sdk";
 /**
+* Base URL for the AMD ROCm pip index (TheRock-based wheel distribution)
+*/
+const ROCM_PIP_INDEX_URL = "https://stable.repo.amd.com/rocm/whl-next/";
+/**
+* Directory name (under `RUNNER_TEMP`) of the action-local venv the pip route installs into
+*/
+const ROCM_PIP_VENV_DIR = "setup-rocm-venv";
+/**
 * URL of the ROCm apt repository's GPG signing key
 */
 const ROCM_GPG_KEY_URL = "https://repo.radeon.com/rocm/rocm.gpg.key";
@@ -17843,6 +17893,39 @@ async function fetchRunfileVersions() {
 	const response = await new HttpClient("setup-rocm").get(ROCM_RUNFILE_INDEX_URL);
 	if (response.message.statusCode !== 200) throw new Error(`Failed to fetch ROCm runfile index from ${ROCM_RUNFILE_INDEX_URL}: ${response.message.statusCode} ${response.message.statusMessage}`);
 	return filterNumericVersions(parseDirectoryIndex(await response.readBody()).filter((entry) => entry.startsWith("rocm-rel-")).map((entry) => entry.slice(9)));
+}
+/**
+* Pattern matching a `rocm-sdk-core` pip wheel filename (e.g.
+* "rocm_sdk_core-12.0.0-py3-none-linux_x86_64.whl"), capturing its version and platform tag
+*/
+const PIP_WHEEL_PATTERN = /rocm_sdk_core-(.+?)-py3-none-(\w+)\.whl/;
+/**
+* Pattern matching an exact Major.Minor.Patch ROCm version (e.g. "10.0.0").
+* `rocm[devel]==<version>` only resolves versions in this shape, so pre-releases and
+* Major.Minor-only entries are excluded from the pip listing
+*/
+const PIP_EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+/**
+* Parse a PEP 503 simple index HTML page (as served for `rocm-sdk-core`) into the
+* Major.Minor.Patch versions that publish a wheel for the given platform tag
+* @param html - The simple index HTML (anchors named after the wheel filename)
+* @param platformTag - Wheel platform tag to match (e.g. "linux_x86_64", "win_amd64")
+* @returns Numeric version strings with a matching wheel, sorted ascending
+*/
+function parsePipIndex(html, platformTag) {
+	return sortVersions(parseIndexLinks(html).map((href) => href.match(PIP_WHEEL_PATTERN)).filter((match) => match !== null && match[2] === platformTag).map((match) => match[1]).filter((version) => PIP_EXACT_VERSION_PATTERN.test(version)));
+}
+/**
+* Fetch available ROCm versions from the AMD pip index (`rocm-sdk-core` simple index) that
+* publish a wheel for the given platform tag
+* @param platformTag - Wheel platform tag to match (e.g. "linux_x86_64", "win_amd64")
+* @returns Promise that resolves to numeric version strings, sorted ascending
+*/
+async function fetchPipVersions(platformTag) {
+	const url = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
+	const response = await new HttpClient("setup-rocm").get(url);
+	if (response.message.statusCode !== 200) throw new Error(`Failed to fetch ROCm pip index from ${url}: ${response.message.statusCode} ${response.message.statusMessage}`);
+	return parsePipIndex(await response.readBody(), platformTag);
 }
 /**
 * Find a matching ROCm version from an available versions list
@@ -19843,6 +19926,62 @@ async function installWindows(input) {
 		rocmPath
 	};
 }
+/**
+* Locate the runner's Python interpreter (`python3` on Linux, `python` on Windows)
+* @param osType - Operating system type
+* @returns Path to the Python interpreter
+*/
+async function findPython(osType) {
+	const pythonName = osType === "windows" ? "python" : "python3";
+	const pythonPath = await which(pythonName);
+	if (!pythonPath) throw new Error(`${pythonName} was not found on PATH. Add actions/setup-python before this action to provide a Python interpreter for the pip method.`);
+	return pythonPath;
+}
+/**
+* Path to a console-script binary inside a venv (Linux: `bin/<name>`, Windows: `Scripts/<name>.exe`)
+* @param venvDir - Path to the venv
+* @param osType - Operating system type
+* @param name - Binary name, without extension
+*/
+function venvBinPath(venvDir, osType, name) {
+	return osType === "windows" ? path.win32.join(venvDir, "Scripts", `${name}.exe`) : path.join(venvDir, "bin", name);
+}
+/**
+* Install ROCm via the AMD pip index (`rocm[devel]==<version>`) into an action-local venv
+* under `RUNNER_TEMP`, then run `rocm-sdk init` to materialize the devel component
+* @param version - Resolved ROCm version (e.g. "10.0.0")
+* @param osType - Operating system type
+* @returns The ROCm root path (`rocm-sdk path --root`) and its bin directory (`rocm-sdk path --bin`)
+*/
+async function installPip(version, osType) {
+	const python = await findPython(osType);
+	const venvDir = path.join(getTempDir(), ROCM_PIP_VENV_DIR);
+	info(`Creating venv at ${venvDir}...`);
+	await exec(`"${python}"`, [
+		"-m",
+		"venv",
+		venvDir
+	]);
+	const pip = venvBinPath(venvDir, osType, "pip");
+	info(`Installing rocm[devel]==${version} from ${ROCM_PIP_INDEX_URL}...`);
+	await exec(`"${pip}"`, [
+		"install",
+		"--index-url",
+		ROCM_PIP_INDEX_URL,
+		`rocm[devel]==${version}`
+	]);
+	const rocmSdk = venvBinPath(venvDir, osType, "rocm-sdk");
+	info("Running rocm-sdk init...");
+	await exec(`"${rocmSdk}"`, ["init"]);
+	const rocmPath = (await getExecOutput(`"${rocmSdk}"`, ["path", "--root"])).stdout.trim();
+	const binPath = (await getExecOutput(`"${rocmSdk}"`, ["path", "--bin"])).stdout.trim();
+	const hipcc = osType === "windows" ? path.win32.join(rocmPath, "bin", "hipcc.exe") : path.join(rocmPath, "bin", "hipcc");
+	if (!fs.existsSync(hipcc)) throw new Error(`ROCm installation failed. hipcc not found: ${hipcc}`);
+	return {
+		rocmPath,
+		binPath
+	};
+}
 //#endregion
 //#region src/index.ts
 /**
@@ -19860,11 +19999,12 @@ async function settleListing(listing, indexUrl) {
 	}
 }
 /**
-* Resolve the ROCm version and route (package-manager/runfile), then install ROCm on Linux.
+* Resolve the ROCm version and route (package-manager/runfile/pip), then install ROCm on Linux.
 * @param inputVersion - Raw `version` input
 * @param method - Parsed `method` input
 * @param distro - Linux distribution information
-* @returns The resolved version and the path to the ROCm installation
+* @returns The resolved version, the path to the ROCm installation, and (pip route only) its
+* bin directory
 */
 async function resolveAndInstallLinux(inputVersion, method, distro) {
 	const debianBased = isDebianBased(distro);
@@ -19883,6 +20023,11 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 		version = findRocmVersion(inputVersion, runfileVersions);
 		if (!version) throw notFoundError(inputVersion, [ROCM_RUNFILE_INDEX_URL]);
 		route = "runfile";
+	} else if (method === "pip") {
+		const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
+		version = findRocmVersion(inputVersion, await fetchPipVersions("linux_x86_64"));
+		if (!version) throw notFoundError(inputVersion, [pipIndexUrl]);
+		route = "pip";
 	} else {
 		const [pmVersions, rfVersions] = await Promise.all([settleListing(fetchPmVersions(), pmIndexUrl), settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL)]);
 		runfileVersions = rfVersions;
@@ -19897,6 +20042,14 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 		({version, route} = resolved);
 	}
 	info(`Resolved ROCm ${version} via ${route}`);
+	if (route === "pip") {
+		const { rocmPath, binPath } = await installPip(version, "linux");
+		return {
+			version,
+			rocmPath,
+			binPath
+		};
+	}
 	if (route === "package-manager") try {
 		const companion = await resolveCompanionRepo(version, distro);
 		const rocmPath = await installPackageManager(version, distro, companion);
@@ -19921,12 +20074,13 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 * Export ROCm environment variables and add its bin directory to PATH
 * @param osType - Operating system type
 * @param rocmPath - Path to the ROCm installation
+* @param binPath - Bin directory to add to PATH (pip route only; defaults to `<rocmPath>/bin`)
 */
-function setEnvironmentVariables(osType, rocmPath) {
+function setEnvironmentVariables(osType, rocmPath, binPath) {
 	exportVariable("ROCM_PATH", rocmPath);
 	exportVariable("ROCM_HOME", rocmPath);
 	exportVariable("HIP_PATH", rocmPath);
-	addPath(path.join(rocmPath, "bin"));
+	addPath(binPath ?? path.join(rocmPath, "bin"));
 	if (osType === "linux") {
 		const rocmLib = path.join(rocmPath, "lib");
 		const existing = process.env.LD_LIBRARY_PATH;
@@ -19946,6 +20100,7 @@ async function run() {
 		if (arch !== "x86_64") throw new Error(`ROCm is not supported on ${osType} with ${arch} architecture`);
 		let version;
 		let rocmPath;
+		let binPath;
 		if (osType === "linux") {
 			const distro = getLinuxDistribution();
 			info(`Linux distribution: ${distro.id} ${distro.version} (${distro.codename}) ${distro.name} ${distro.idLink}`);
@@ -19953,6 +20108,7 @@ async function run() {
 			const result = await resolveAndInstallLinux(inputVersion, method, distro);
 			version = result.version;
 			rocmPath = result.rocmPath;
+			binPath = result.binPath;
 		} else {
 			const windowsVersion = getWindowsVersion();
 			info(`Windows version: ${windowsVersion.name} (${windowsVersion.release}, build ${windowsVersion.build})`);
@@ -19961,7 +20117,7 @@ async function run() {
 			version = result.version;
 			rocmPath = result.rocmPath;
 		}
-		setEnvironmentVariables(osType, rocmPath);
+		setEnvironmentVariables(osType, rocmPath, binPath);
 		setOutput("version", version);
 		setOutput("rocm-path", rocmPath);
 		info("ROCm installation completed successfully");

@@ -15,11 +15,12 @@ inputs:
     default: latest
   method:
     description: |
-      The method to use to install ROCm. (package-manager, runfile, auto)
+      The method to use to install ROCm. (package-manager, runfile, pip, auto)
       If this value is not specified, the auto method will be used.
       The auto method will try to install ROCm using the package-manager method first, and if it fails, it will try to install ROCm using the runfile method.
       The package-manager method installs ROCm from AMD's official apt/dnf repository.
       The runfile method downloads and runs AMD's official runfile installer.
+      The pip method installs ROCm from AMD's pip index into an action-local Python virtual environment.
       This input is only used on Linux and is ignored on Windows.
     default: auto
 
