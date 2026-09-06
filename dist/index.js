@@ -17878,13 +17878,18 @@ async function fetchAptVersions(codename) {
 	return versions.filter((_version, index) => exists[index]);
 }
 /**
-* Fetch available ROCm versions from the el<major> (RHEL-based) repository
+* Fetch available ROCm versions from the el<major> (RHEL-based) repository.
+* AMD only publishes a repository for some majors (el8, el9, el10); a definite 404 for any
+* other major (Amazon Linux 2023, Fedora, el7) means "no versions" rather than a fetch failure,
+* so it must not make `auto` treat the package-manager listing as unavailable.
 * @param major - RHEL major version (e.g., "9")
-* @returns Promise that resolves to numeric version strings, sorted ascending
+* @returns Promise that resolves to numeric version strings, sorted ascending (empty when AMD
+*   publishes no repository for the major)
 */
 async function fetchElVersions(major) {
 	const url = ROCM_EL_INDEX_URL(major);
 	const response = await new HttpClient("setup-rocm").get(url);
+	if (response.message.statusCode === 404) return [];
 	if (response.message.statusCode !== 200) throw new Error(`Failed to fetch ROCm el${major} index from ${url}: ${response.message.statusCode} ${response.message.statusMessage}`);
 	return filterNumericVersions(parseDirectoryIndex(await response.readBody()));
 }
@@ -20081,8 +20086,14 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 			isPipRoute: false
 		};
 	} catch (installError) {
-		runfileVersions = runfileVersions ?? await fetchRunfileVersions();
-		if (method === "auto" && selectFallbackAfterInstallFailure(version, runfileVersions) === "runfile") {
+		if (method !== "auto") throw installError;
+		if (runfileVersions === void 0) try {
+			runfileVersions = await fetchRunfileVersions();
+		} catch (listingError) {
+			warning(`Could not fetch the ROCm runfile listing to retry ${version}: ${getErrorMessage(listingError)}`);
+			throw installError;
+		}
+		if (selectFallbackAfterInstallFailure(version, runfileVersions) === "runfile") {
 			info(`package-manager install failed; retrying ${version} via runfile: ${getErrorMessage(installError)}`);
 			route = "runfile";
 		} else throw installError;
