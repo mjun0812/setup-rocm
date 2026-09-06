@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vite-plus/test';
 import { resolveAutoVersion } from '../src/rocm';
 import { WINDOWS_HIP_SDK_INSTALLERS } from '../src/const';
 
-// Checks for ADR 0006 ("only an exact version resolves when a listing is missing")
-// applied to the full 3-route Linux and 2-route Windows configurations that
-// `method: auto` actually uses (spec.md AC "auto で pip の一覧が欠けたとき").
-// T-002's rocm_auto_routes.test.ts covers the same routes with every listing present;
-// this file covers them with the pip listing missing.
+// When one route listing could not be fetched, `method: auto` only serves an exact
+// Major.Minor.Patch request from the remaining listings; `latest` and partial versions
+// are refused because they cannot be determined without every listing. These checks
+// apply that rule to the 3-route Linux and 2-route Windows configurations with the pip
+// listing missing. rocm_auto_routes.test.ts covers the same routes with every listing
+// present.
 
 describe('resolveAutoVersion with a missing listing (Linux, 3 routes)', () => {
   const routes = [

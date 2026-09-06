@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vite-plus/test';
 import { resolveAutoVersion } from '../src/rocm';
 import { WINDOWS_HIP_SDK_INSTALLERS } from '../src/const';
 
-// Checks for the generalized resolveAutoVersion(input, routes) seam (design.md
-// "Interfaces & Seams"): `routes` is a priority-ordered `{ route, versions? }[]`.
+// Checks for the resolveAutoVersion(input, routes) contract: `routes` is a
+// priority-ordered `{ route, versions? }[]`.
 // The resolved version is the newest across the union of all routes' listings
 // (numeric equality, e.g. runfile "10.0" == pip "10.0.0"), and when several routes
 // ship the same resolved version, the first one in `routes` (priority) order wins.
