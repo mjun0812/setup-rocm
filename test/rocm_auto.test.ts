@@ -5,7 +5,10 @@ import { resolveAutoVersion } from '../src/rocm';
 // runfile installer also ships 7.14.x and 10.0.
 const PM_VERSIONS = ['6.2.4', '7.2', '7.2.4'];
 const RUNFILE_VERSIONS = ['6.3.1', '7.2', '7.2.4', '7.14', '7.14.1', '10.0'];
-const BOTH = { packageManager: PM_VERSIONS, runfile: RUNFILE_VERSIONS };
+const BOTH = [
+  { route: 'package-manager', versions: PM_VERSIONS },
+  { route: 'runfile', versions: RUNFILE_VERSIONS },
+];
 
 describe('resolveAutoVersion with both listings', () => {
   it('resolves latest to the newest release across both routes', () => {
@@ -36,8 +39,14 @@ describe('resolveAutoVersion with both listings', () => {
 });
 
 describe('resolveAutoVersion when one listing is unavailable', () => {
-  const ONLY_PM = { packageManager: PM_VERSIONS };
-  const ONLY_RUNFILE = { runfile: RUNFILE_VERSIONS };
+  const ONLY_PM = [
+    { route: 'package-manager', versions: PM_VERSIONS },
+    { route: 'runfile', versions: undefined },
+  ];
+  const ONLY_RUNFILE = [
+    { route: 'package-manager', versions: undefined },
+    { route: 'runfile', versions: RUNFILE_VERSIONS },
+  ];
 
   it('installs an exact version from the remaining listing', () => {
     expect(resolveAutoVersion('7.14.1', ONLY_RUNFILE)).toEqual({
@@ -66,6 +75,10 @@ describe('resolveAutoVersion when one listing is unavailable', () => {
   });
 
   it('fails when no listing is available', () => {
-    expect(() => resolveAutoVersion('7.2.4', {})).toThrow(/no version listing/);
+    const NEITHER = [
+      { route: 'package-manager', versions: undefined },
+      { route: 'runfile', versions: undefined },
+    ];
+    expect(() => resolveAutoVersion('7.2.4', NEITHER)).toThrow(/no version listing/);
   });
 });

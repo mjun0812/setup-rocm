@@ -1,5 +1,5 @@
 import { HttpClient } from '@actions/http-client';
-import { sortVersions, getErrorMessage } from './utils';
+import { sortVersions, getErrorMessage, compareVersions } from './utils';
 import { isDebianBased, LinuxDistribution } from './os_arch';
 import { WINDOWS_HIP_SDK_INSTALLERS, ROCM_PIP_INDEX_URL } from './const';
 
@@ -450,52 +450,64 @@ export function findWindowsInstaller(input: string): { version: string; url: str
 }
 
 /**
- * Version listings available to `method: auto`. A missing listing means its index could
- * not be fetched.
+ * One priority-ordered route's version listing, as passed to `resolveAutoVersion`.
+ * A missing `versions` means that route's index could not be fetched. The route name is a
+ * free type parameter: it need not be an `InstallRoute` (e.g. Windows passes `'installer'`)
  */
-export interface AutoVersionListings {
-  packageManager?: string[];
-  runfile?: string[];
+export interface AutoVersionRoute<R extends string> {
+  route: R;
+  versions?: string[];
 }
 
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
- * Resolve a requested version for `method: auto`.
- * With both listings the newest match across them wins, so `latest` always means the newest
- * ROCm release regardless of which route ships it. A version that both routes offer is
- * installed via the package manager.
- * When one listing is unavailable, only an exact `Major.Minor.Patch` request can still be
- * answered from the remaining listing; `latest` and partial versions depend on both
- * listings and are refused instead of silently resolving to an older release.
+ * Resolve a requested version for `method: auto` across a priority-ordered list of routes.
+ * The newest match across the union of all routes' listings wins, so `latest` always means
+ * the newest ROCm release regardless of which route ships it. When several routes ship a
+ * numerically equal version (e.g. runfile's "10.0" and pip's "10.0.0"), the first route in
+ * `routes` order is used, and the returned version is that route's own version string.
+ * When a route's listing is unavailable, only an exact `Major.Minor.Patch` request can still
+ * be answered from the remaining listings; `latest` and partial versions depend on every
+ * listing and are refused instead of silently resolving to an older release.
  * @param input - Requested version (latest / Major / Major.Minor / Major.Minor.Patch)
- * @param listings - Versions available per route; undefined when that index could not be fetched
- * @returns The resolved version and the route that provides it, or undefined if none matches
- * @throws Error if the request cannot be decided because a listing is unavailable
+ * @param routes - Routes in priority order, each with its versions (undefined when that
+ * route's index could not be fetched)
+ * @returns The resolved version (as listed by the route that provides it) and that route,
+ * or undefined if none matches
+ * @throws Error if the request cannot be decided because a route's listing is unavailable
  */
-export function resolveAutoVersion(
+export function resolveAutoVersion<R extends string>(
   input: string,
-  listings: AutoVersionListings
-): { version: string; route: InstallRoute } | undefined {
-  const { packageManager, runfile } = listings;
-  if (packageManager && runfile) {
-    const version = findRocmVersion(input, [...packageManager, ...runfile]);
-    if (!version) {
-      return undefined;
-    }
-    return { version, route: packageManager.includes(version) ? 'package-manager' : 'runfile' };
-  }
-  if (!packageManager && !runfile) {
+  routes: AutoVersionRoute<R>[]
+): { version: string; route: R } | undefined {
+  const available = routes.filter(
+    (candidate): candidate is AutoVersionRoute<R> & { versions: string[] } =>
+      candidate.versions !== undefined
+  );
+  if (available.length === 0) {
     throw new Error('Cannot resolve the ROCm version: no version listing is available');
   }
-  if (!EXACT_VERSION_PATTERN.test(input)) {
-    const missing = packageManager ? 'runfile' : 'package-manager';
+  const missing = routes.filter((candidate) => candidate.versions === undefined);
+  if (missing.length > 0 && !EXACT_VERSION_PATTERN.test(input)) {
     throw new Error(
-      `Cannot resolve ROCm version (${input}) with method auto because the ${missing} version listing is unavailable. ` +
+      `Cannot resolve ROCm version (${input}) with method auto because the ` +
+        `${missing.map((candidate) => candidate.route).join(', ')} version listing is unavailable. ` +
         'Specify an exact Major.Minor.Patch version, or set method explicitly.'
     );
   }
-  const route: InstallRoute = packageManager ? 'package-manager' : 'runfile';
-  const version = findRocmVersion(input, packageManager ?? runfile ?? []);
-  return version ? { version, route } : undefined;
+  const version = findRocmVersion(
+    input,
+    available.flatMap((candidate) => candidate.versions)
+  );
+  if (!version) {
+    return undefined;
+  }
+  const matchedRoute = available.find((candidate) =>
+    candidate.versions.some((listed) => compareVersions(listed, version) === 0)
+  )!;
+  const matchedVersion = matchedRoute.versions.find(
+    (listed) => compareVersions(listed, version) === 0
+  )!;
+  return { version: matchedVersion, route: matchedRoute.route };
 }

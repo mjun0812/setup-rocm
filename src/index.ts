@@ -96,10 +96,10 @@ async function resolveAndInstallLinux(
       settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL),
     ]);
     runfileVersions = rfVersions;
-    const resolved = resolveAutoVersion(inputVersion, {
-      packageManager: pmVersions,
-      runfile: rfVersions,
-    });
+    const resolved = resolveAutoVersion(inputVersion, [
+      { route: 'package-manager', versions: pmVersions },
+      { route: 'runfile', versions: rfVersions },
+    ]);
     if (!resolved) {
       const sourceUrls = [
         ...(pmVersions ? [pmIndexUrl] : []),

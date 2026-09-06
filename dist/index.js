@@ -18000,36 +18000,33 @@ function findWindowsInstaller(input) {
 }
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 /**
-* Resolve a requested version for `method: auto`.
-* With both listings the newest match across them wins, so `latest` always means the newest
-* ROCm release regardless of which route ships it. A version that both routes offer is
-* installed via the package manager.
-* When one listing is unavailable, only an exact `Major.Minor.Patch` request can still be
-* answered from the remaining listing; `latest` and partial versions depend on both
-* listings and are refused instead of silently resolving to an older release.
+* Resolve a requested version for `method: auto` across a priority-ordered list of routes.
+* The newest match across the union of all routes' listings wins, so `latest` always means
+* the newest ROCm release regardless of which route ships it. When several routes ship a
+* numerically equal version (e.g. runfile's "10.0" and pip's "10.0.0"), the first route in
+* `routes` order is used, and the returned version is that route's own version string.
+* When a route's listing is unavailable, only an exact `Major.Minor.Patch` request can still
+* be answered from the remaining listings; `latest` and partial versions depend on every
+* listing and are refused instead of silently resolving to an older release.
 * @param input - Requested version (latest / Major / Major.Minor / Major.Minor.Patch)
-* @param listings - Versions available per route; undefined when that index could not be fetched
-* @returns The resolved version and the route that provides it, or undefined if none matches
-* @throws Error if the request cannot be decided because a listing is unavailable
+* @param routes - Routes in priority order, each with its versions (undefined when that
+* route's index could not be fetched)
+* @returns The resolved version (as listed by the route that provides it) and that route,
+* or undefined if none matches
+* @throws Error if the request cannot be decided because a route's listing is unavailable
 */
-function resolveAutoVersion(input, listings) {
-	const { packageManager, runfile } = listings;
-	if (packageManager && runfile) {
-		const version = findRocmVersion(input, [...packageManager, ...runfile]);
-		if (!version) return;
-		return {
-			version,
-			route: packageManager.includes(version) ? "package-manager" : "runfile"
-		};
-	}
-	if (!packageManager && !runfile) throw new Error("Cannot resolve the ROCm version: no version listing is available");
-	if (!EXACT_VERSION_PATTERN.test(input)) throw new Error(`Cannot resolve ROCm version (${input}) with method auto because the ${packageManager ? "runfile" : "package-manager"} version listing is unavailable. Specify an exact Major.Minor.Patch version, or set method explicitly.`);
-	const route = packageManager ? "package-manager" : "runfile";
-	const version = findRocmVersion(input, packageManager ?? runfile ?? []);
-	return version ? {
-		version,
-		route
-	} : void 0;
+function resolveAutoVersion(input, routes) {
+	const available = routes.filter((candidate) => candidate.versions !== void 0);
+	if (available.length === 0) throw new Error("Cannot resolve the ROCm version: no version listing is available");
+	const missing = routes.filter((candidate) => candidate.versions === void 0);
+	if (missing.length > 0 && !EXACT_VERSION_PATTERN.test(input)) throw new Error(`Cannot resolve ROCm version (${input}) with method auto because the ${missing.map((candidate) => candidate.route).join(", ")} version listing is unavailable. Specify an exact Major.Minor.Patch version, or set method explicitly.`);
+	const version = findRocmVersion(input, available.flatMap((candidate) => candidate.versions));
+	if (!version) return;
+	const matchedRoute = available.find((candidate) => candidate.versions.some((listed) => compareVersions(listed, version) === 0));
+	return {
+		version: matchedRoute.versions.find((listed) => compareVersions(listed, version) === 0),
+		route: matchedRoute.route
+	};
 }
 //#endregion
 //#region node_modules/.pnpm/semver@7.8.5/node_modules/semver/internal/constants.js
@@ -19879,10 +19876,13 @@ async function resolveAndInstallLinux(inputVersion, method, distro) {
 	} else {
 		const [pmVersions, rfVersions] = await Promise.all([settleListing(fetchPmVersions(), pmIndexUrl), settleListing(fetchRunfileVersions(), ROCM_RUNFILE_INDEX_URL)]);
 		runfileVersions = rfVersions;
-		const resolved = resolveAutoVersion(inputVersion, {
-			packageManager: pmVersions,
-			runfile: rfVersions
-		});
+		const resolved = resolveAutoVersion(inputVersion, [{
+			route: "package-manager",
+			versions: pmVersions
+		}, {
+			route: "runfile",
+			versions: rfVersions
+		}]);
 		if (!resolved) throw notFoundError(inputVersion, [...pmVersions ? [pmIndexUrl] : [], ...rfVersions ? [ROCM_RUNFILE_INDEX_URL] : []]);
 		({version, route} = resolved);
 	}
