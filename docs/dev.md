@@ -117,8 +117,8 @@ Runs on:
 Weekly matrix:
 
 - OS: ubuntu-22.04, ubuntu-24.04, windows-2022, windows-2025
-- Method: package-manager, runfile, auto (Windows only runs `auto`, since `method` is ignored there)
-- ROCm version: latest
+- Method: package-manager, runfile, pip, auto on Linux. Windows runs `auto` only: `package-manager` and `runfile` are treated as `auto` there, and `auto` + `latest` already resolves to the pip route
+- ROCm version: latest, plus `7.2` with `auto` on windows-2022 so that the HIP SDK installer route (which `latest` no longer reaches) is exercised every week
 
 Both triggers call the reusable `.github/workflows/_test.yml` workflow, which installs ROCm via the local action and cross-compiles a minimal HIP kernel (`hipcc --offload-arch=gfx942 -c`) to verify the toolchain without a GPU.
 
