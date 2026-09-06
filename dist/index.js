@@ -17734,8 +17734,8 @@ function ROCM_EL_REPO_URL(major, version) {
 */
 function parseMethod(input) {
 	if (input === "") return "auto";
-	if (input === "package-manager" || input === "runfile" || input === "auto") return input;
-	throw new Error(`Invalid method: ${input}. Valid methods are: package-manager, runfile, auto`);
+	if (input === "package-manager" || input === "runfile" || input === "pip" || input === "auto") return input;
+	throw new Error(`Invalid method: ${input}. Valid methods are: package-manager, runfile, pip, auto`);
 }
 /**
 * Base URL for the AMD ROCm apt repository directory index

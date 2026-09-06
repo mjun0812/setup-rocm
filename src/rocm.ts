@@ -1,12 +1,12 @@
 import { HttpClient } from '@actions/http-client';
 import { sortVersions, getErrorMessage } from './utils';
 import { isDebianBased, LinuxDistribution } from './os_arch';
-import { WINDOWS_HIP_SDK_INSTALLERS } from './const';
+import { WINDOWS_HIP_SDK_INSTALLERS, ROCM_PIP_INDEX_URL } from './const';
 
 /**
  * Supported ROCm installation methods
  */
-export type InstallMethod = 'package-manager' | 'runfile' | 'auto';
+export type InstallMethod = 'package-manager' | 'runfile' | 'pip' | 'auto';
 export type InstallRoute = Exclude<InstallMethod, 'auto'>;
 
 /**
@@ -18,10 +18,12 @@ export function parseMethod(input: string): InstallMethod {
   if (input === '') {
     return 'auto';
   }
-  if (input === 'package-manager' || input === 'runfile' || input === 'auto') {
+  if (input === 'package-manager' || input === 'runfile' || input === 'pip' || input === 'auto') {
     return input;
   }
-  throw new Error(`Invalid method: ${input}. Valid methods are: package-manager, runfile, auto`);
+  throw new Error(
+    `Invalid method: ${input}. Valid methods are: package-manager, runfile, pip, auto`
+  );
 }
 
 /**
@@ -177,6 +179,54 @@ export async function fetchRunfileVersions(): Promise<string[]> {
     .filter((entry) => entry.startsWith('rocm-rel-'))
     .map((entry) => entry.slice('rocm-rel-'.length));
   return filterNumericVersions(entries);
+}
+
+/**
+ * Pattern matching a `rocm-sdk-core` pip wheel filename (e.g.
+ * "rocm_sdk_core-12.0.0-py3-none-linux_x86_64.whl"), capturing its version and platform tag
+ */
+const PIP_WHEEL_PATTERN = /rocm_sdk_core-(.+?)-py3-none-(\w+)\.whl/;
+
+/**
+ * Pattern matching an exact Major.Minor.Patch ROCm version (e.g. "10.0.0").
+ * `rocm[devel]==<version>` only resolves versions in this shape, so pre-releases and
+ * Major.Minor-only entries are excluded from the pip listing
+ */
+const PIP_EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
+
+/**
+ * Parse a PEP 503 simple index HTML page (as served for `rocm-sdk-core`) into the
+ * Major.Minor.Patch versions that publish a wheel for the given platform tag
+ * @param html - The simple index HTML (anchors named after the wheel filename)
+ * @param platformTag - Wheel platform tag to match (e.g. "linux_x86_64", "win_amd64")
+ * @returns Numeric version strings with a matching wheel, sorted ascending
+ */
+export function parsePipIndex(html: string, platformTag: string): string[] {
+  const versions = parseIndexLinks(html)
+    .map((href) => href.match(PIP_WHEEL_PATTERN))
+    .filter((match): match is RegExpMatchArray => match !== null && match[2] === platformTag)
+    .map((match) => match[1])
+    .filter((version) => PIP_EXACT_VERSION_PATTERN.test(version));
+  return sortVersions(versions);
+}
+
+/**
+ * Fetch available ROCm versions from the AMD pip index (`rocm-sdk-core` simple index) that
+ * publish a wheel for the given platform tag
+ * @param platformTag - Wheel platform tag to match (e.g. "linux_x86_64", "win_amd64")
+ * @returns Promise that resolves to numeric version strings, sorted ascending
+ */
+export async function fetchPipVersions(platformTag: string): Promise<string[]> {
+  const url = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
+  const client = new HttpClient('setup-rocm');
+  const response = await client.get(url);
+  if (response.message.statusCode !== 200) {
+    throw new Error(
+      `Failed to fetch ROCm pip index from ${url}: ${response.message.statusCode} ${response.message.statusMessage}`
+    );
+  }
+  const html = await response.readBody();
+  return parsePipIndex(html, platformTag);
 }
 
 /**

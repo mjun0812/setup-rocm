@@ -25,6 +25,11 @@ export const WINDOWS_HIP_SDK_INSTALLERS: Record<string, string> = {
 export const ROCM_META_PACKAGE = 'rocm-hip-sdk';
 
 /**
+ * Base URL for the AMD ROCm pip index (TheRock-based wheel distribution)
+ */
+export const ROCM_PIP_INDEX_URL = 'https://stable.repo.amd.com/rocm/whl-next/';
+
+/**
  * URL of the ROCm apt repository's GPG signing key
  */
 export const ROCM_GPG_KEY_URL = 'https://repo.radeon.com/rocm/rocm.gpg.key';
