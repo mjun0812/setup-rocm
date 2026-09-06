@@ -135,11 +135,22 @@ async function resolveAndInstallLinux(
       const rocmPath = await installPackageManager(version!, distro, companion);
       return { version: version!, rocmPath, isPipRoute: false };
     } catch (installError) {
-      runfileVersions = runfileVersions ?? (await fetchRunfileVersions());
-      if (
-        method === 'auto' &&
-        selectFallbackAfterInstallFailure(version!, runfileVersions) === 'runfile'
-      ) {
+      // Only `auto` may retry via the runfile, so only `auto` needs the runfile listing.
+      // A listing that cannot be fetched must not hide the install error itself.
+      if (method !== 'auto') {
+        throw installError;
+      }
+      if (runfileVersions === undefined) {
+        try {
+          runfileVersions = await fetchRunfileVersions();
+        } catch (listingError) {
+          core.warning(
+            `Could not fetch the ROCm runfile listing to retry ${version}: ${getErrorMessage(listingError)}`
+          );
+          throw installError;
+        }
+      }
+      if (selectFallbackAfterInstallFailure(version!, runfileVersions) === 'runfile') {
         core.info(
           `package-manager install failed; retrying ${version} via runfile: ${getErrorMessage(installError)}`
         );
