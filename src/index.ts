@@ -57,14 +57,14 @@ async function settleListing(
  * @param inputVersion - Raw `version` input
  * @param method - Parsed `method` input
  * @param distro - Linux distribution information
- * @returns The resolved version, the path to the ROCm installation, and (pip route only) its
- * bin directory
+ * @returns The resolved version, the path to the ROCm installation, (pip route only) its bin
+ * directory, and whether the pip route was used
  */
 async function resolveAndInstallLinux(
   inputVersion: string,
   method: InstallMethod,
   distro: LinuxDistribution
-): Promise<{ version: string; rocmPath: string; binPath?: string }> {
+): Promise<{ version: string; rocmPath: string; binPath?: string; isPipRoute: boolean }> {
   const debianBased = isDebianBased(distro);
   const major = distro.version.split('.')[0];
   const pmIndexUrl = debianBased ? ROCM_APT_INDEX_URL : ROCM_EL_INDEX_URL(major);
@@ -126,14 +126,14 @@ async function resolveAndInstallLinux(
 
   if (route === 'pip') {
     const { rocmPath, binPath } = await installPip(version!, OS.LINUX);
-    return { version: version!, rocmPath, binPath };
+    return { version: version!, rocmPath, binPath, isPipRoute: true };
   }
 
   if (route === 'package-manager') {
     try {
       const companion = await resolveCompanionRepo(version!, distro);
       const rocmPath = await installPackageManager(version!, distro, companion);
-      return { version: version!, rocmPath };
+      return { version: version!, rocmPath, isPipRoute: false };
     } catch (installError) {
       runfileVersions = runfileVersions ?? (await fetchRunfileVersions());
       if (
@@ -151,7 +151,7 @@ async function resolveAndInstallLinux(
   }
 
   const rocmPath = await installRunfile(version!, distro);
-  return { version: version!, rocmPath };
+  return { version: version!, rocmPath, isPipRoute: false };
 }
 
 /**
@@ -160,13 +160,13 @@ async function resolveAndInstallLinux(
  * before Windows had a second route) and treated as `auto`.
  * @param inputVersion - Raw `version` input
  * @param method - Parsed `method` input
- * @returns The resolved version, the path to the ROCm installation, and (pip route only) its
- * bin directory
+ * @returns The resolved version, the path to the ROCm installation, (pip route only) its bin
+ * directory, and whether the pip route was used
  */
 async function resolveAndInstallWindows(
   inputVersion: string,
   method: InstallMethod
-): Promise<{ version: string; rocmPath: string; binPath?: string }> {
+): Promise<{ version: string; rocmPath: string; binPath?: string; isPipRoute: boolean }> {
   const pipIndexUrl = `${ROCM_PIP_INDEX_URL}rocm-sdk-core/`;
 
   if (method === 'pip') {
@@ -176,7 +176,7 @@ async function resolveAndInstallWindows(
     }
     core.info(`Resolved ROCm ${version} via pip`);
     const { rocmPath, binPath } = await installPip(version, OS.WINDOWS);
-    return { version, rocmPath, binPath };
+    return { version, rocmPath, binPath, isPipRoute: true };
   }
 
   if (method !== 'auto') {
@@ -201,11 +201,41 @@ async function resolveAndInstallWindows(
 
   if (route === 'pip') {
     const { rocmPath, binPath } = await installPip(version, OS.WINDOWS);
-    return { version, rocmPath, binPath };
+    return { version, rocmPath, binPath, isPipRoute: true };
   }
 
   const result = await installWindows(version);
-  return { version: result.version, rocmPath: result.rocmPath };
+  return { version: result.version, rocmPath: result.rocmPath, isPipRoute: false };
+}
+
+/**
+ * Build the ROCM_PATH/ROCM_HOME/HIP_PATH environment variables for the resolved installation,
+ * plus (pip route only) HIP_DEVICE_LIB_PATH.
+ *
+ * clang's RocmInstallationDetector only looks for the device bitcode under
+ * `<ROCM_PATH>/amdgcn/bitcode`, but the pip route's TheRock tree keeps it under
+ * `lib/llvm/amdgcn/bitcode` instead, so hipcc needs HIP_DEVICE_LIB_PATH pointed at it directly
+ * (the same workaround TheRock's own build scripts use).
+ * @param rocmPath - Path to the ROCm installation
+ * @param isPipRoute - Whether ROCm was installed via the pip route
+ * @returns Environment variable name/value pairs to export
+ */
+function buildRocmEnvironmentVariables(
+  rocmPath: string,
+  isPipRoute: boolean
+): { name: string; value: string }[] {
+  const vars = [
+    { name: 'ROCM_PATH', value: rocmPath },
+    { name: 'ROCM_HOME', value: rocmPath },
+    { name: 'HIP_PATH', value: rocmPath },
+  ];
+  if (isPipRoute) {
+    vars.push({
+      name: 'HIP_DEVICE_LIB_PATH',
+      value: path.join(rocmPath, 'lib', 'llvm', 'amdgcn', 'bitcode'),
+    });
+  }
+  return vars;
 }
 
 /**
@@ -213,11 +243,17 @@ async function resolveAndInstallWindows(
  * @param osType - Operating system type
  * @param rocmPath - Path to the ROCm installation
  * @param binPath - Bin directory to add to PATH (pip route only; defaults to `<rocmPath>/bin`)
+ * @param isPipRoute - Whether ROCm was installed via the pip route
  */
-function setEnvironmentVariables(osType: OS, rocmPath: string, binPath?: string): void {
-  core.exportVariable('ROCM_PATH', rocmPath);
-  core.exportVariable('ROCM_HOME', rocmPath);
-  core.exportVariable('HIP_PATH', rocmPath);
+function setEnvironmentVariables(
+  osType: OS,
+  rocmPath: string,
+  binPath: string | undefined,
+  isPipRoute: boolean
+): void {
+  for (const { name, value } of buildRocmEnvironmentVariables(rocmPath, isPipRoute)) {
+    core.exportVariable(name, value);
+  }
   core.addPath(binPath ?? path.join(rocmPath, 'bin'));
   if (osType === OS.LINUX) {
     // Never leave an empty element (trailing ':'): the dynamic linker would
@@ -251,6 +287,7 @@ async function run(): Promise<void> {
     let version: string;
     let rocmPath: string;
     let binPath: string | undefined;
+    let isPipRoute: boolean;
 
     if (osType === OS.LINUX) {
       const distro = getLinuxDistribution();
@@ -266,6 +303,7 @@ async function run(): Promise<void> {
       version = result.version;
       rocmPath = result.rocmPath;
       binPath = result.binPath;
+      isPipRoute = result.isPipRoute;
     } else {
       const windowsVersion = getWindowsVersion();
       core.info(
@@ -276,10 +314,11 @@ async function run(): Promise<void> {
       version = result.version;
       rocmPath = result.rocmPath;
       binPath = result.binPath;
+      isPipRoute = result.isPipRoute;
     }
 
     // Set environment variables
-    setEnvironmentVariables(osType, rocmPath, binPath);
+    setEnvironmentVariables(osType, rocmPath, binPath, isPipRoute);
 
     // Set outputs
     core.setOutput('version', version);
