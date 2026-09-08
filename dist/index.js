@@ -19976,6 +19976,7 @@ async function installPip(version, osType) {
 	]);
 	const pip = venvBinPath(venvDir, osType, "pip");
 	info(`Installing rocm[devel]==${version} from ${ROCM_PIP_INDEX_URL}...`);
+	const pythonDevNull = osType === "windows" ? "nul" : "/dev/null";
 	await exec(`"${pip}"`, [
 		"install",
 		"--isolated",
@@ -19984,7 +19985,7 @@ async function installPip(version, osType) {
 		`rocm[devel]==${version}`
 	], { env: {
 		...process.env,
-		PIP_CONFIG_FILE: os.devNull
+		PIP_CONFIG_FILE: pythonDevNull
 	} });
 	const rocmSdk = venvBinPath(venvDir, osType, "rocm-sdk");
 	info("Running rocm-sdk init...");
