@@ -1,0 +1,37 @@
+name: mjun0812/setup-rocm
+description: Set up a specific version of AMD ROCm in GitHub Actions.
+author: mjun0812
+
+branding:
+  icon: box
+  color: red
+
+inputs:
+  version:
+    description: |
+      The version of AMD ROCm to install.
+      Accepts 'latest', 'Major' (e.g. '7'), 'Major.Minor' (e.g. '7.2'), or 'Major.Minor.Patch' (e.g. '7.2.4').
+      If the Minor or Patch version is not specified, the latest matching version will be installed.
+    default: latest
+  method:
+    description: |
+      The method to use to install ROCm. (package-manager, runfile, pip, auto)
+      If this value is not specified, the auto method will be used.
+      The auto method resolves the requested version across the listings of every route and installs it through the route that ships it.
+      When several routes ship the same version, package-manager wins over runfile, and runfile wins over pip; if the package-manager install fails, the same version is retried via runfile.
+      With the default 'latest', auto currently installs the newest ROCm via the runfile on Linux and via pip on Windows (into a virtual environment under RUNNER_TEMP), because the newest releases are only shipped that way.
+      The package-manager method installs ROCm from AMD's official apt/dnf repository.
+      The runfile method downloads and runs AMD's official runfile installer.
+      The pip method installs ROCm from AMD's pip index into an action-local Python virtual environment.
+      On Windows, only the pip method is honored explicitly; package-manager and runfile are ignored and treated as auto (an info log notes that it was ignored). Windows auto picks between the HIP SDK installer and pip, preferring the installer when both ship the same version.
+    default: auto
+
+outputs:
+  version:
+    description: The version of AMD ROCm that was installed.
+  rocm-path:
+    description: The path to the AMD ROCm installation.
+
+runs:
+  using: node24
+  main: dist/index.js

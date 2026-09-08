@@ -56,19 +56,32 @@ jobs:
         method:
           - package-manager
           - runfile
+          - pip
           - auto
         version:
           - latest
         exclude:
-          # Windows ignores `method` (single HIP SDK installer route), so only `auto` is needed.
+          # Windows has two routes (HIP SDK installer and pip). `package-manager` and `runfile`
+          # are treated as `auto` there, and `auto` + `latest` already lands on the pip route,
+          # so the explicit `pip` entry would duplicate it.
           - os: windows-2022
             method: package-manager
           - os: windows-2022
             method: runfile
+          - os: windows-2022
+            method: pip
           - os: windows-2025
             method: package-manager
           - os: windows-2025
             method: runfile
+          - os: windows-2025
+            method: pip
+        include:
+          # The HIP SDK installer route only wins `auto` for versions the pip index does not
+          # ship, so pin the newest installer version to keep that route exercised weekly.
+          - os: windows-2022
+            method: auto
+            version: '7.2'
     uses: ./.github/workflows/_test.yml
     with:
       os: ${{ matrix.os }}

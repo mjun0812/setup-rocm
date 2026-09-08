@@ -1,0 +1,126 @@
+name: _Test_Container
+
+on:
+  workflow_call:
+    inputs:
+      container:
+        description: 'Docker image to use (e.g. almalinux:9)'
+        required: true
+        type: string
+      version:
+        description: 'ROCm version to test'
+        required: false
+        type: string
+        default: latest
+      method:
+        description: 'Method to test'
+        required: false
+        type: string
+        default: auto
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  TestContainer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: ${{ inputs.container }}
+      volumes:
+        - /usr/share/dotnet:/usr/share/dotnet
+        - /usr/local/lib/android:/usr/local/lib/android
+    env:
+      ACTIONS_STEP_DEBUG: ${{ inputs.debug }}
+      ACTIONS_RUNNER_DEBUG: ${{ inputs.debug }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install System Dependencies (Container)
+        shell: bash
+        run: dnf install -y --allowerasing libxml2 wget gcc gcc-c++ make curl sudo git which tar gzip
+
+      - name: Show Container Information
+        run: |
+          df -h || true
+          echo "-------"
+          cat /proc/cpuinfo || true
+          echo "-------"
+          cat /etc/os-release || true
+          echo "-------"
+          free -h || true
+
+      - name: Expand Disk Space
+        run: |
+          df -h
+          rm -rf /usr/share/dotnet || true
+          rm -rf /usr/local/lib/android || true
+          echo "-------"
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+          node-version-file: .node-version
+
+      - name: Build
+        run: vp pack
+
+      - name: Test Local Action
+        id: setup-rocm
+        uses: ./
+        with:
+          version: ${{ inputs.version }}
+          method: ${{ inputs.method }}
+
+      - name: Verify ROCm Installation (Linux)
+        shell: bash
+        run: |
+          echo "outputs.version=${{ steps.setup-rocm.outputs.version }}"
+          echo "outputs.rocm-path=${{ steps.setup-rocm.outputs.rocm-path }}"
+
+          echo "PATH: $PATH"
+
+          # Check if ROCM_PATH is set
+          if [ -z "$ROCM_PATH" ]; then
+            echo "Error: ROCM_PATH is not set"
+            exit 1
+          fi
+          echo "ROCM_PATH=$ROCM_PATH"
+
+          ls "$ROCM_PATH"
+          ls "$ROCM_PATH/bin"
+
+          # Check if hipcc exists
+          if command -v hipcc &> /dev/null; then
+            echo "hipcc found at: $(which hipcc)"
+            hipcc --version
+          else
+            echo "Error: hipcc not found in PATH"
+            exit 1
+          fi
+
+          echo "ROCm installation verified successfully"
+
+      - name: Cross-compile HIP kernel (gfx942)
+        shell: bash
+        run: |
+          cat <<EOF > "$RUNNER_TEMP/kernel.hip"
+          #include <hip/hip_runtime.h>
+
+          __global__ void add(const float* a, const float* b, float* c, int n) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n) c[i] = a[i] + b[i];
+          }
+          EOF
+
+          hipcc --offload-arch=gfx942 -c "$RUNNER_TEMP/kernel.hip" -o "$RUNNER_TEMP/kernel.o"
+          test -s "$RUNNER_TEMP/kernel.o"
