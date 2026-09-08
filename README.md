@@ -95,7 +95,9 @@ for the device library directly under `<rocm-path>/amdgcn/bitcode` and TheRock's
 [actions/setup-python](https://github.com/actions/setup-python) before this action if the runner
 doesn't already provide one. PyPI also hosts unrelated same-named placeholder packages (`rocm`,
 `rocm-sdk-core`, etc.); this action only ever installs from AMD's index (`--index-url`, never
-`--extra-index-url`), so those PyPI packages are never consulted.
+`--extra-index-url`) and runs pip with `--isolated`, so `PIP_EXTRA_INDEX_URL` or a pip.conf
+in the workflow environment cannot add another index and those PyPI packages are never
+consulted.
 
 ```yaml
 steps:

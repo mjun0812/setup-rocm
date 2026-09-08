@@ -387,12 +387,15 @@ export async function installPip(
 
   const pip = venvBinPath(venvDir, osType, 'pip');
   core.info(`Installing rocm[devel]==${version} from ${ROCM_PIP_INDEX_URL}...`);
-  await exec.exec(`"${pip}"`, [
-    'install',
-    '--index-url',
-    ROCM_PIP_INDEX_URL,
-    `rocm[devel]==${version}`,
-  ]);
+  // `--isolated` makes pip ignore PIP_* environment variables and the user/global pip.conf,
+  // and PIP_CONFIG_FILE=os.devnull covers the remaining site config, so an extra index
+  // configured by the workflow (PIP_EXTRA_INDEX_URL, extra-index-url, ...) cannot add PyPI
+  // or another source; only the AMD index is consulted.
+  await exec.exec(
+    `"${pip}"`,
+    ['install', '--isolated', '--index-url', ROCM_PIP_INDEX_URL, `rocm[devel]==${version}`],
+    { env: { ...process.env, PIP_CONFIG_FILE: os.devnull } }
+  );
 
   const rocmSdk = venvBinPath(venvDir, osType, 'rocm-sdk');
   core.info('Running rocm-sdk init...');
