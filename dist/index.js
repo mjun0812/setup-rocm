@@ -19984,7 +19984,7 @@ async function installPip(version, osType) {
 		`rocm[devel]==${version}`
 	], { env: {
 		...process.env,
-		PIP_CONFIG_FILE: os.devnull
+		PIP_CONFIG_FILE: os.devNull
 	} });
 	const rocmSdk = venvBinPath(venvDir, osType, "rocm-sdk");
 	info("Running rocm-sdk init...");

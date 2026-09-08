@@ -394,7 +394,7 @@ export async function installPip(
   await exec.exec(
     `"${pip}"`,
     ['install', '--isolated', '--index-url', ROCM_PIP_INDEX_URL, `rocm[devel]==${version}`],
-    { env: { ...process.env, PIP_CONFIG_FILE: os.devnull } }
+    { env: { ...process.env, PIP_CONFIG_FILE: os.devNull } }
   );
 
   const rocmSdk = venvBinPath(venvDir, osType, 'rocm-sdk');
