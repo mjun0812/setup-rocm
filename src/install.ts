@@ -13,10 +13,20 @@ import {
   ROCM_APT_REPO_URL,
   ROCM_EL_REPO_URL,
   ROCM_META_PACKAGE,
+  ROCM_HIP_COMPILER_PACKAGE_APT,
+  ROCM_HIP_COMPILER_PACKAGE_DNF,
   ROCM_PIP_INDEX_URL,
   ROCM_PIP_VENV_DIR,
   WINDOWS_HIP_SDK_INSTALLERS,
 } from './const';
+
+/**
+ * Seconds an install command may run before it is stopped. Installs run unattended, so one that
+ * stops making progress has to fail the step: otherwise it holds the runner until the job's own
+ * timeout, which a self-hosted runner typically sets to a day or more. An hour is several times
+ * the longest install observed (about 15 minutes for the runfile installer).
+ */
+const INSTALL_TIMEOUT_SECONDS = 3600;
 
 /**
  * Get sudo prefix for command execution
@@ -24,6 +34,17 @@ import {
  */
 function getSudoPrefix(): string {
   return hasRootPrivileges() ? '' : 'sudo';
+}
+
+/**
+ * Run a long install command as `<sudo> timeout ... <command>`, stopping it after
+ * `INSTALL_TIMEOUT_SECONDS` (and killing it a minute later if it ignores that). `timeout` goes
+ * after sudo so it runs as root and can signal the root processes the command starts
+ * @param command - The command to bound
+ * @param sudoPrefix - 'sudo' or '' (from `getSudoPrefix`)
+ */
+function boundedCommand(command: string, sudoPrefix: string): string {
+  return `${sudoPrefix} timeout --kill-after=60 ${INSTALL_TIMEOUT_SECONDS} ${command}`.trim();
 }
 
 /**
@@ -122,8 +143,9 @@ async function installPackageManagerDebian(
   core.info('Running apt-get update...');
   await exec.exec(`${sudoPrefix} apt-get update`.trim(), undefined, { env });
 
-  core.info(`Installing ${ROCM_META_PACKAGE}...`);
-  await exec.exec(`${sudoPrefix} apt-get install -y ${ROCM_META_PACKAGE}`.trim(), undefined, {
+  const packages = `${ROCM_META_PACKAGE} ${ROCM_HIP_COMPILER_PACKAGE_APT}`;
+  core.info(`Installing ${packages}...`);
+  await exec.exec(boundedCommand(`apt-get install -y ${packages}`, sudoPrefix), undefined, {
     env,
   });
 }
@@ -204,8 +226,9 @@ async function installPackageManagerRhel(
   core.info('Running dnf clean all...');
   await exec.exec(`${sudoPrefix} dnf clean all`.trim());
 
-  core.info(`Installing ${ROCM_META_PACKAGE}...`);
-  await exec.exec(`${sudoPrefix} dnf install -y ${ROCM_META_PACKAGE}`.trim());
+  const packages = `${ROCM_META_PACKAGE} ${ROCM_HIP_COMPILER_PACKAGE_DNF}`;
+  core.info(`Installing ${packages}...`);
+  await exec.exec(boundedCommand(`dnf install -y ${packages}`, sudoPrefix));
 }
 
 /**
@@ -276,8 +299,13 @@ export async function installRunfile(version: string, distro: LinuxDistribution)
 
   const sudoPrefix = getSudoPrefix();
   core.info(`Installing ROCm ${version} via runfile installer...`);
-  await exec.exec(`${sudoPrefix} bash ${installerPath} ${installArgs}`.trim(), undefined, {
+  await exec.exec(boundedCommand(`bash ${installerPath} ${installArgs}`, sudoPrefix), undefined, {
     cwd: tempDir,
+    // The installer asks for confirmation when it finds an existing ROCm, such as one the
+    // package-manager route left in /opt before `auto` fell back here. @actions/exec keeps the
+    // child's stdin open unless `input` is given, so that prompt waited for an answer that never
+    // came; an empty input closes stdin and the prompt reads EOF instead.
+    input: Buffer.alloc(0),
   });
 
   core.info('Cleaning up installer...');

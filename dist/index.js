@@ -17747,6 +17747,15 @@ const WINDOWS_HIP_SDK_INSTALLERS = {
 */
 const ROCM_META_PACKAGE = "rocm-hip-sdk";
 /**
+* The HIP compiler meta-package (hipcc, rocm-llvm, hip-dev), installed alongside
+* `ROCM_META_PACKAGE`. rocm-hip-sdk depends on it in every release from 4.5 to 7.2.4 except
+* 7.1 and 7.1.1, whose apt and dnf packages dropped the dependency and install the libraries
+* without a compiler. The package exists in every repository that ships rocm-hip-sdk, so naming
+* it explicitly changes nothing for the other releases.
+*/
+const ROCM_HIP_COMPILER_PACKAGE_APT = "rocm-hip-runtime-dev";
+const ROCM_HIP_COMPILER_PACKAGE_DNF = "rocm-hip-runtime-devel";
+/**
 * Base URL for the AMD ROCm pip index (TheRock-based wheel distribution).
 * `/rocm/whl-next/` 301-redirects here with a relative `Location` header, which
 * `@actions/http-client` cannot follow (it requires an absolute URL), so this
@@ -19713,11 +19722,28 @@ function _getGlobal(key, defaultValue) {
 //#endregion
 //#region src/install.ts
 /**
+* Seconds an install command may run before it is stopped. Installs run unattended, so one that
+* stops making progress has to fail the step: otherwise it holds the runner until the job's own
+* timeout, which a self-hosted runner typically sets to a day or more. An hour is several times
+* the longest install observed (about 15 minutes for the runfile installer).
+*/
+const INSTALL_TIMEOUT_SECONDS = 3600;
+/**
 * Get sudo prefix for command execution
 * @returns 'sudo' if root privileges are not present, empty string otherwise
 */
 function getSudoPrefix() {
 	return hasRootPrivileges() ? "" : "sudo";
+}
+/**
+* Run a long install command as `<sudo> timeout ... <command>`, stopping it after
+* `INSTALL_TIMEOUT_SECONDS` (and killing it a minute later if it ignores that). `timeout` goes
+* after sudo so it runs as root and can signal the root processes the command starts
+* @param command - The command to bound
+* @param sudoPrefix - 'sudo' or '' (from `getSudoPrefix`)
+*/
+function boundedCommand(command, sudoPrefix) {
+	return `${sudoPrefix} timeout --kill-after=60 ${INSTALL_TIMEOUT_SECONDS} ${command}`.trim();
 }
 /**
 * Get the runner's temp directory
@@ -19791,8 +19817,9 @@ async function installPackageManagerDebian(version, distro, companion) {
 	};
 	info("Running apt-get update...");
 	await exec(`${sudoPrefix} apt-get update`.trim(), void 0, { env });
-	info(`Installing ${ROCM_META_PACKAGE}...`);
-	await exec(`${sudoPrefix} apt-get install -y ${ROCM_META_PACKAGE}`.trim(), void 0, { env });
+	const packages = `${ROCM_META_PACKAGE} ${ROCM_HIP_COMPILER_PACKAGE_APT}`;
+	info(`Installing ${packages}...`);
+	await exec(boundedCommand(`apt-get install -y ${packages}`, sudoPrefix), void 0, { env });
 }
 /**
 * Enable the RHEL-based repo required for `rocm-hip-sdk`'s dependencies: `powertools` on el8,
@@ -19846,8 +19873,9 @@ async function installPackageManagerRhel(version, distro, companion) {
 	await writeRootFile(buildRocmRepoFile(version, major, companion), "/etc/yum.repos.d/rocm.repo", sudoPrefix);
 	info("Running dnf clean all...");
 	await exec(`${sudoPrefix} dnf clean all`.trim());
-	info(`Installing ${ROCM_META_PACKAGE}...`);
-	await exec(`${sudoPrefix} dnf install -y ${ROCM_META_PACKAGE}`.trim());
+	const packages = `${ROCM_META_PACKAGE} ${ROCM_HIP_COMPILER_PACKAGE_DNF}`;
+	info(`Installing ${packages}...`);
+	await exec(boundedCommand(`dnf install -y ${packages}`, sudoPrefix));
 }
 /**
 * Verify that `hipcc` exists under /opt/rocm/bin, as installed by apt/dnf or the runfile installer
@@ -19890,7 +19918,10 @@ async function installRunfile(version, distro) {
 	if (isNewGenInstaller) info("New-generation runfile installer detected; passing gfx=all compo=core-sdk to skip GPU auto-detection and install the complete SDK.");
 	const sudoPrefix = getSudoPrefix();
 	info(`Installing ROCm ${version} via runfile installer...`);
-	await exec(`${sudoPrefix} bash ${installerPath} ${installArgs}`.trim(), void 0, { cwd: tempDir });
+	await exec(boundedCommand(`bash ${installerPath} ${installArgs}`, sudoPrefix), void 0, {
+		cwd: tempDir,
+		input: Buffer.alloc(0)
+	});
 	info("Cleaning up installer...");
 	await rmRF(installerPath);
 	return verifyLinuxRocmInstall();

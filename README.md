@@ -235,7 +235,7 @@ This action automatically configures the following environment variables for sub
 
 The list of available versions is fetched dynamically from AMD's official repository index at [repo.radeon.com](https://repo.radeon.com/) on every run; it is not hard-coded, so newly released versions are picked up automatically.
 
-- **`package-manager`**: apt on Ubuntu 22.04 (jammy) / 24.04 (noble), and dnf on RHEL-based el8 / el9 / el10 (AlmaLinux, etc.). Installs the `rocm-hip-sdk` meta-package.
+- **`package-manager`**: apt on Ubuntu 22.04 (jammy) / 24.04 (noble), and dnf on RHEL-based el8 / el9 / el10 (AlmaLinux, etc.). Installs the `rocm-hip-sdk` meta-package together with the HIP compiler meta-package (`rocm-hip-runtime-dev` on apt, `rocm-hip-runtime-devel` on dnf), which ROCm 7.1 and 7.1.1 no longer pull in through `rocm-hip-sdk`.
 - **`runfile`**: Supports ROCm 6.3.1 and later. Installers for ROCm 7.12 and later (`rocm-installer-<version>-<n>.run`) automatically receive `gfx=all compo=core-sdk` so they skip GPU auto-detection (there is no GPU on the runner) and install the complete SDK, including headers.
 
 There is no fixed lower version bound on Linux, but versions older than ROCm 6.x are not verified in CI.
