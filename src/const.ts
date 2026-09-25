@@ -25,6 +25,16 @@ export const WINDOWS_HIP_SDK_INSTALLERS: Record<string, string> = {
 export const ROCM_META_PACKAGE = 'rocm-hip-sdk';
 
 /**
+ * The HIP compiler meta-package (hipcc, rocm-llvm, hip-dev), installed alongside
+ * `ROCM_META_PACKAGE`. rocm-hip-sdk depends on it in every release from 4.5 to 7.2.4 except
+ * 7.1 and 7.1.1, whose apt and dnf packages dropped the dependency and install the libraries
+ * without a compiler. The package exists in every repository that ships rocm-hip-sdk, so naming
+ * it explicitly changes nothing for the other releases.
+ */
+export const ROCM_HIP_COMPILER_PACKAGE_APT = 'rocm-hip-runtime-dev';
+export const ROCM_HIP_COMPILER_PACKAGE_DNF = 'rocm-hip-runtime-devel';
+
+/**
  * Base URL for the AMD ROCm pip index (TheRock-based wheel distribution).
  * `/rocm/whl-next/` 301-redirects here with a relative `Location` header, which
  * `@actions/http-client` cannot follow (it requires an absolute URL), so this
